@@ -178,7 +178,7 @@ void LAppDelegate::Run()
                         WaylandContext::OutputInfo* new_out = _wlContext.outputs[new_idx];
                         _dragStartX -= (out->x - new_out->x);
                         _dragStartY -= (out->y - new_out->y);
-                        float x_shift = (float)(out->x - new_out->x) / (float)_windowWidth * 2.0f;
+                        float x_shift = (float)(out->x - new_out->x) / (float)_windowHeight * 2.0f;
                         float y_shift = -(float)(out->y - new_out->y) / (float)_windowHeight * 2.0f;
                         _modelX -= x_shift / _modelScale;
                         _modelY -= y_shift / _modelScale;
@@ -269,7 +269,7 @@ void LAppDelegate::InitializeCubism()
                         WaylandContext::OutputInfo* new_out = _wlContext.outputs[new_idx];
                         _dragStartX -= (out->x - new_out->x);
                         _dragStartY -= (out->y - new_out->y);
-                        float x_shift = (float)(out->x - new_out->x) / (float)_windowWidth * 2.0f;
+                        float x_shift = (float)(out->x - new_out->x) / (float)_windowHeight * 2.0f;
                         float y_shift = -(float)(out->y - new_out->y) / (float)_windowHeight * 2.0f;
                         _modelX -= x_shift / _modelScale;
                         _modelY -= y_shift / _modelScale;
@@ -372,7 +372,7 @@ void LAppDelegate::OnMouseCallBack(void* window, double x, double y)
         int deltaY = static_cast<int>(curY) - _dragStartY;
         
         if (deltaX != 0 || deltaY != 0) {
-            float dx_logical = (float)deltaX / (float)_windowWidth * 2.0f;
+            float dx_logical = (float)deltaX / (float)_windowHeight * 2.0f;
             float dy_logical = -(float)deltaY / (float)_windowHeight * 2.0f; // Y axis is flipped in OpenGL
             
             _modelX += dx_logical / _modelScale;
