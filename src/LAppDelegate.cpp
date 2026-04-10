@@ -40,7 +40,12 @@ bool GetHyprlandCursor(int& x, int& y) {
     if(sock < 0) return false;
     struct sockaddr_un addr;
     addr.sun_family = AF_UNIX;
-    sprintf(addr.sun_path, "/tmp/hypr/%s/.socket.sock", sig);
+    const char* xdg = getenv("XDG_RUNTIME_DIR");
+    if (xdg) {
+        sprintf(addr.sun_path, "%s/hypr/%s/.socket.sock", xdg, sig);
+    } else {
+        sprintf(addr.sun_path, "/tmp/hypr/%s/.socket.sock", sig);
+    }
     if(connect(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(sock); return false; }
     const char* cmd = "-j/cursorpos";
     if(write(sock, cmd, strlen(cmd)) < 0) { close(sock); return false; }
