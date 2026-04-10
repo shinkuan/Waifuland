@@ -1,0 +1,203 @@
+/**
+ * Copyright(c) Live2D Inc. All rights reserved.
+ *
+ * Use of this source code is governed by the Live2D Open Software license
+ * that can be found at https://www.live2d.com/eula/live2d-open-software-license-agreement_en.html.
+ */
+
+#pragma once
+
+#include <string>
+#include <GL/glew.h>
+#include <GLFW/glfw3.h>
+#include "Type/csmVector.hpp"
+#include "LAppAllocator_Common.hpp"
+
+class LAppView;
+class LAppTextureManager;
+
+/**
+* @brief   アプリケーションクラス。
+*   Cubism3の管理を行う。
+*/
+class LAppDelegate
+{
+public:
+    /**
+    * @brief   クラスのインスタンス（シングルトン）を返す。<br>
+    *           インスタンスが生成されていない場合は内部でインスタンを生成する。
+    *
+    * @return  クラスのインスタンス
+    */
+    static LAppDelegate* GetInstance();
+
+    /**
+    * @brief   クラスのインスタンス（シングルトン）を解放する。
+    *
+    */
+    static void ReleaseInstance();
+
+    /**
+    * @brief   APPに必要なものを初期化する。
+    */
+    bool Initialize();
+
+    /**
+    * @brief   解放する。
+    */
+    void Release();
+
+    /**
+    * @brief   実行処理。
+    */
+    void Run();
+
+    /**
+    * @brief   OpenGL用 glfwSetMouseButtonCallback用関数。
+    *
+    * @param[in]       window            コールバックを呼んだWindow情報
+    * @param[in]       button            ボタン種類
+    * @param[in]       action            実行結果
+    * @param[in]       modify
+    */
+    void OnMouseCallBack(GLFWwindow* window, int button, int action, int modify);
+
+    /**
+    * @brief   OpenGL用 glfwSetCursorPosCallback用関数。
+    *
+    * @param[in]       window            コールバックを呼んだWindow情報
+    * @param[in]       x                 x座標
+    * @param[in]       y                 x座標
+    */
+    void OnMouseCallBack(GLFWwindow* window, double x, double y);
+
+    /**
+     * @brief   ウィンドウクライアント領域の幅、高さ取得
+     */
+    static void GetClientSize(int& rWidth, int& rHeight);
+
+    /**
+    * @brief   Window情報を取得する。
+    */
+    GLFWwindow* GetWindow() { return _window; }
+
+    /**
+    * @brief   View情報を取得する。
+    */
+    LAppView* GetView() { return _view; }
+
+    /**
+    * @brief   アプリケーションを終了するかどうか。
+    */
+    bool GetIsEnd() { return _isEnd; }
+
+    /**
+    * @brief   アプリケーションを終了する。
+    */
+    void AppEnd() { _isEnd = true; }
+
+    /**
+     * @brief   アプリケーションの実行パスを設定する。
+     */
+    void SetExecuteAbsolutePath();
+
+    /**
+     * @brief   アプリケーションの実行パスを取得する。
+     */
+    std::string GetExecuteAbsolutePath(){ return _executeAbsolutePath;}
+
+    /**
+     * @brief   テクスチャマネージャーを取得する。
+     */
+    LAppTextureManager* GetTextureManager() { return _textureManager; }
+
+    /**
+     * @brief ウインドウ幅の取得
+     *
+     * @return ウインドウ幅を返す
+     */
+    int GetWindowWidth() { return _windowWidth; }
+
+    /**
+     * @brief ウインドウ高さの取得
+     *
+     * @return ウインドウ高さを返す
+     */
+    int GetWindowHeight() { return _windowHeight; }
+
+private:
+    /**
+     * @brief   コンストラクタ
+     */
+    LAppDelegate();
+
+    /**
+     * @brief   デストラクタ
+     */
+    ~LAppDelegate();
+
+    /**
+     * @brief   Cubism3の初期化
+     */
+    void InitializeCubism();
+
+    LAppAllocator_Common _cubismAllocator;              ///< Cubism3 Allocator
+    Csm::CubismFramework::Option _cubismOption;  ///< Cubism3 Option
+    GLFWwindow* _window;                         ///< OpenGL ウィンドウ
+    LAppView* _view;                             ///< View情報
+    bool _captured;                              ///< クリックしているか
+    float _mouseX;                               ///< マウスX座標
+    float _mouseY;                               ///< マウスY座標
+    bool _isEnd;                                 ///< APP終了しているか
+    LAppTextureManager* _textureManager;         ///< テクスチャマネージャー
+    std::string _executeAbsolutePath;            ///< アプリケーションの実行パス
+
+    int _windowWidth;                            ///< Initialize関数で設定したウィンドウ幅
+    int _windowHeight;                           ///< Initialize関数で設定したウィンドウ高さ
+
+    bool _isDraggingWindow;
+    int _dragStartX;
+    int _dragStartY;
+    int _windowStartX;
+    int _windowStartY;
+    float _lookCenterX;
+    float _lookCenterY;
+
+public:
+    void SetLookCenter(float x, float y) {
+        _lookCenterX = x;
+        _lookCenterY = y;
+    }
+    float GetLookCenterX() const { return _lookCenterX; }
+    float GetLookCenterY() const { return _lookCenterY; }
+    void OnScrollCallBack(GLFWwindow* window, double xoffset, double yoffset);
+
+};
+
+class EventHandler
+{
+public:
+    /**
+    * @brief   glfwSetMouseButtonCallback用コールバック関数。
+    */
+    static void OnMouseCallBack(GLFWwindow* window, int button, int action, int modify)
+    {
+        LAppDelegate::GetInstance()->OnMouseCallBack(window, button, action, modify);
+    }
+
+    /**
+    * @brief   glfwSetCursorPosCallback用コールバック関数。
+    */
+    static void OnMouseCallBack(GLFWwindow* window, double x, double y)
+    {
+         LAppDelegate::GetInstance()->OnMouseCallBack(window, x, y);
+    }
+    
+    /**
+    * @brief   glfwSetScrollCallback用コールバック関数。
+    */
+    static void OnScrollCallBack(GLFWwindow* window, double xoffset, double yoffset)
+    {
+         LAppDelegate::GetInstance()->OnScrollCallBack(window, xoffset, yoffset);
+    }
+};

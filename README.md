@@ -1,112 +1,41 @@
 # Waifuland
 
-A Live2D desktop mascot application built with Tauri 2 + PIXI.js. The model is rendered on a transparent, borderless, always-on-top window, and its eyes follow your cursor across all monitors (Hyprland).
+## 安裝指南 (Installation Guide)
 
-## Prerequisites
+### 準備工作 (Prerequisites)
+1. 前往 Live2D 官方網站下載 **Cubism SDK for Native**:
+   [https://www.live2d.com/en/sdk/about/](https://www.live2d.com/en/sdk/about/)
+2. 將下載的 SDK 解壓縮到專案根目錄 (`./`)。
+   *(例如：`CubismSdkForNative-5-r.5`)*
+3. 如果您下載的 SDK 版本或資料夾名稱與預設不同，請開啟 `CMakeLists.txt` 並更新對應的 SDK 名稱或路徑。
 
-- [Node.js](https://nodejs.org/) (v18+)
-- [Rust](https://rustup.rs/) (stable)
-- [Tauri 2 CLI](https://v2.tauri.app/start/prerequisites/)
-- **Hyprland** window manager (cursor tracking uses `hyprctl cursorpos`)
+### 安裝與編譯 (Build Instructions)
 
-## Setup
+您可以使用我們提供的自動安裝腳本，或是手動執行指令。
 
+#### 方法一：使用自動安裝腳本
+在終端機中，賦予腳本執行權限並執行：
 ```bash
-npm install
+chmod +x install.sh
+./install.sh
 ```
 
-## Development
+#### 方法二：手動編譯
+1. **設定第三方函式庫 (GLEW & GLFW)**
+   進入 `thirdParty` 資料夾並執行設定腳本：
+   ```bash
+   cd thirdParty
+   ./scripts/setup_glew_glfw
+   cd ..
+   ```
 
-```bash
-npm run tauri dev
-```
+2. **建立與編譯專案**
+   建立 `build` 資料夾並使用 CMake 進行編譯：
+   ```bash
+   mkdir build
+   cd build
+   cmake ..
+   make -j
+   ```
 
-## Production Build
-
-```bash
-npm run tauri build
-```
-
-The built binary will be in `src-tauri/target/release/`.
-
-## Adding Models
-
-Place Live2D Cubism 4 models under the `models/` directory. Each model should be in its own subdirectory containing a `.model3.json` file:
-
-```
-models/
-  my-model/
-    my-model.model3.json
-    my-model.moc3
-    textures/
-      ...
-```
-
-Restart the application after adding new models. Right-click to switch between loaded models.
-
-## Usage
-
-### Window Controls
-
-| Action | Description |
-|--------|-------------|
-| **Left-click + drag** | Move the window |
-| **Scroll wheel up** | Enlarge the window (and model) |
-| **Scroll wheel down** | Shrink the window (and model) |
-| **Right-click** | Open context menu |
-
-### Context Menu
-
-- **Model list** - Click a model name to switch to it
-- **Always on Top: ON/OFF** - Toggle whether the window stays above other windows
-- **Quit** - Close the application
-
-### Window Size
-
-The window starts at 600x800 pixels. Use the scroll wheel to resize (range: 200-2000 px per side). The model automatically scales to fill 90% of the window height.
-
-### Eye Tracking
-
-The model's gaze follows your mouse cursor. This works across all monitors on Hyprland by reading the global cursor position via `hyprctl cursorpos`.
-
-## Project Structure
-
-```
-Waifuland/
-  index.html            # HTML entry point
-  src/
-    main.js             # Frontend logic (PIXI, Live2D, window controls)
-    style.css           # Styles (context menu, canvas)
-  src-tauri/
-    src/lib.rs          # Rust backend (model listing, file serving)
-    tauri.conf.json     # Tauri window & build configuration
-    capabilities/       # Permission definitions
-  models/               # Live2D model files
-  public/lib/           # Bundled PIXI.js + Live2D Cubism libraries
-```
-
-## Configuration
-
-### Window defaults
-
-Edit `src-tauri/tauri.conf.json` to change default window size, transparency, etc.:
-
-```json
-"windows": [{
-  "width": 600,
-  "height": 800,
-  "decorations": false,
-  "transparent": true,
-  "alwaysOnTop": true
-}]
-```
-
-### Resize limits
-
-In `src/main.js`, the scroll-wheel resize range is controlled by:
-
-```javascript
-const newWidth = Math.max(200, Math.min(2000, ...));
-```
-
-Change `200` (minimum) and `2000` (maximum) to adjust the resize bounds.
+編譯完成後，執行檔將會產生在 `build/bin/` 目錄下。

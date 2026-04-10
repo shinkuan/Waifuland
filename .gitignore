@@ -1,5 +1,5 @@
-.claude
-dist
+build
+CubismSdkForNative*
 models
-node_modules
-src-tauri/target
+thirdParty/glew
+thirdParty/glfw
