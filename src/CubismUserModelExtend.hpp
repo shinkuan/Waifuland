@@ -42,7 +42,7 @@ public:
     *
     * モデルの状態や描画を更新する
     */
-    void ModelOnUpdate(GLFWwindow* window);
+    void ModelOnUpdate(void* window);
 
 private:
     /**

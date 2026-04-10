@@ -13,10 +13,10 @@
 #include <iostream>
 #include <fstream>
 #include <GL/glew.h>
-#include <GLFW/glfw3.h>
 #include <Model/CubismMoc.hpp>
 #include "LAppDefine.hpp"
 #include "LAppDelegate.hpp"
+#include <time.h>
 
 using std::endl;
 using namespace Csm;
@@ -26,6 +26,13 @@ using namespace LAppDefine;
 double LAppPal::s_currentFrame = 0.0;
 double LAppPal::s_lastFrame = 0.0;
 double LAppPal::s_deltaTime = 0.0;
+
+static double GetCurrentTimeSeconds()
+{
+    struct timespec tv;
+    clock_gettime(CLOCK_MONOTONIC, &tv);
+    return tv.tv_sec + tv.tv_nsec / 1000000000.0;
+}
 
 csmByte* LAppPal::LoadFileAsBytes(const string filePath, csmSizeInt* outSize)
 {
@@ -91,7 +98,7 @@ csmFloat32  LAppPal::GetDeltaTime()
 
 void LAppPal::UpdateTime()
 {
-    s_currentFrame = glfwGetTime();
+    s_currentFrame = GetCurrentTimeSeconds();
     s_deltaTime = s_currentFrame - s_lastFrame;
     s_lastFrame = s_currentFrame;
 }

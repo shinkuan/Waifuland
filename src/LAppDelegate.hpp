@@ -9,7 +9,7 @@
 
 #include <string>
 #include <GL/glew.h>
-#include <GLFW/glfw3.h>
+#include "LAppWayland.hpp"
 #include "Type/csmVector.hpp"
 #include "LAppAllocator_Common.hpp"
 
@@ -60,7 +60,7 @@ public:
     * @param[in]       action            実行結果
     * @param[in]       modify
     */
-    void OnMouseCallBack(GLFWwindow* window, int button, int action, int modify);
+    void OnMouseCallBack(void* window, int button, int action, int modify);
 
     /**
     * @brief   OpenGL用 glfwSetCursorPosCallback用関数。
@@ -69,7 +69,7 @@ public:
     * @param[in]       x                 x座標
     * @param[in]       y                 x座標
     */
-    void OnMouseCallBack(GLFWwindow* window, double x, double y);
+    void OnMouseCallBack(void* window, double x, double y);
 
     /**
      * @brief   ウィンドウクライアント領域の幅、高さ取得
@@ -77,9 +77,9 @@ public:
     static void GetClientSize(int& rWidth, int& rHeight);
 
     /**
-    * @brief   Window情報を取得する。
+    * @brief   WaylandContextを取得する。
     */
-    GLFWwindow* GetWindow() { return _window; }
+    WaylandContext* GetWindow() { return &_wlContext; }
 
     /**
     * @brief   View情報を取得する。
@@ -142,9 +142,9 @@ private:
     void InitializeCubism();
 
     LAppAllocator_Common _cubismAllocator;              ///< Cubism3 Allocator
-    Csm::CubismFramework::Option _cubismOption;  ///< Cubism3 Option
-    GLFWwindow* _window;                         ///< OpenGL ウィンドウ
-    LAppView* _view;                             ///< View情報
+    Csm::CubismFramework::Option _cubismOption;         ///< Cubism3 Option
+    WaylandContext _wlContext;                          ///< Wayland Context
+    LAppView* _view;                                    ///< View情報
     bool _captured;                              ///< クリックしているか
     float _mouseX;                               ///< マウスX座標
     float _mouseY;                               ///< マウスY座標
@@ -162,6 +162,10 @@ private:
     int _windowStartY;
     float _lookCenterX;
     float _lookCenterY;
+    public:
+    float _modelScale;
+    float _modelX;
+    float _modelY;
 
 public:
     void SetLookCenter(float x, float y) {
@@ -170,7 +174,7 @@ public:
     }
     float GetLookCenterX() const { return _lookCenterX; }
     float GetLookCenterY() const { return _lookCenterY; }
-    void OnScrollCallBack(GLFWwindow* window, double xoffset, double yoffset);
+    void OnScrollCallBack(void* window, double xoffset, double yoffset);
 
 };
 
@@ -180,7 +184,7 @@ public:
     /**
     * @brief   glfwSetMouseButtonCallback用コールバック関数。
     */
-    static void OnMouseCallBack(GLFWwindow* window, int button, int action, int modify)
+    static void OnMouseCallBack(void* window, int button, int action, int modify)
     {
         LAppDelegate::GetInstance()->OnMouseCallBack(window, button, action, modify);
     }
@@ -188,7 +192,7 @@ public:
     /**
     * @brief   glfwSetCursorPosCallback用コールバック関数。
     */
-    static void OnMouseCallBack(GLFWwindow* window, double x, double y)
+    static void OnMouseCallBack(void* window, double x, double y)
     {
          LAppDelegate::GetInstance()->OnMouseCallBack(window, x, y);
     }
@@ -196,7 +200,7 @@ public:
     /**
     * @brief   glfwSetScrollCallback用コールバック関数。
     */
-    static void OnScrollCallBack(GLFWwindow* window, double xoffset, double yoffset)
+    static void OnScrollCallBack(void* window, double xoffset, double yoffset)
     {
          LAppDelegate::GetInstance()->OnScrollCallBack(window, xoffset, yoffset);
     }

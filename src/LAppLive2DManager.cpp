@@ -14,7 +14,7 @@
 #include <libgen.h>
 #include <limits.h>
 #include <GL/glew.h>
-#include <GLFW/glfw3.h>
+
 #include <Rendering/CubismRenderer.hpp>
 #include <Rendering/OpenGL/CubismOffscreenManager_OpenGLES2.hpp>
 #include "LAppPal.hpp"
@@ -208,7 +208,7 @@ void LAppLive2DManager::OnTap(csmFloat32 x, csmFloat32 y)
 void LAppLive2DManager::OnUpdate() const
 {
     int width, height;
-    glfwGetWindowSize(LAppDelegate::GetInstance()->GetWindow(), &width, &height);
+    width = LAppDelegate::GetInstance()->GetWindowWidth(); height = LAppDelegate::GetInstance()->GetWindowHeight();
 
     // モデルで使用するオフスクリーン管理の開始処理
     Csm::Rendering::CubismOffscreenManager_OpenGLES2::GetInstance()->BeginFrameProcess();
@@ -227,7 +227,6 @@ void LAppLive2DManager::OnUpdate() const
 
         if (model->GetModel()->GetCanvasWidth() > 1.0f && width < height)
         {
-            // 横に長いモデルを縦長ウィンドウに表示する際モデルの横サイズでscaleを算出する
             model->GetModelMatrix()->SetWidth(2.0f);
             projection.Scale(1.0f, static_cast<float>(width) / static_cast<float>(height));
         }
@@ -235,6 +234,10 @@ void LAppLive2DManager::OnUpdate() const
         {
             projection.Scale(static_cast<float>(height) / static_cast<float>(width), 1.0f);
         }
+
+        LAppDelegate* app = LAppDelegate::GetInstance();
+        projection.ScaleRelative(app->_modelScale, app->_modelScale);
+        projection.TranslateRelative(app->_modelX, app->_modelY);
 
         // 必要があればここで乗算
         if (_viewMatrix != NULL)

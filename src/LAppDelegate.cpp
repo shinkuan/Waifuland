@@ -1,3 +1,7 @@
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+#include <string.h>
 /**
  * Copyright(c) Live2D Inc. All rights reserved.
  *
@@ -12,9 +16,10 @@
 #include <unistd.h>
 #include <libgen.h>
 #include <GL/glew.h>
-#include <GLFW/glfw3.h>
+
 #include "LAppView.hpp"
 #include "LAppPal.hpp"
+#include "LAppWaylandRegion.hpp"
 #include "LAppDefine.hpp"
 #include "LAppLive2DManager.hpp"
 #include "LAppTextureManager.hpp"
@@ -25,6 +30,32 @@ using namespace LAppDefine;
 
 namespace {
     LAppDelegate* s_instance = NULL;
+}
+
+
+bool GetHyprlandCursor(int& x, int& y) {
+    const char* sig = getenv("HYPRLAND_INSTANCE_SIGNATURE");
+    if (!sig) return false;
+    int sock = socket(AF_UNIX, SOCK_STREAM, 0);
+    if(sock < 0) return false;
+    struct sockaddr_un addr;
+    addr.sun_family = AF_UNIX;
+    sprintf(addr.sun_path, "/tmp/hypr/%s/.socket.sock", sig);
+    if(connect(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(sock); return false; }
+    const char* cmd = "-j/cursorpos";
+    if(write(sock, cmd, strlen(cmd)) < 0) { close(sock); return false; }
+    char buf[256] = {0};
+    int n = read(sock, buf, 255);
+    close(sock);
+    if (n <= 0) return false;
+    char* x_str = strstr(buf, "\"x\":");
+    char* y_str = strstr(buf, "\"y\":");
+    if (x_str && y_str) {
+        x = atoi(x_str + 4);
+        y = atoi(y_str + 4);
+        return true;
+    }
+    return false;
 }
 
 LAppDelegate* LAppDelegate::GetInstance()
@@ -54,36 +85,12 @@ bool LAppDelegate::Initialize()
         LAppPal::PrintLogLn("START");
     }
 
-    // GLFWの初期化
-    if (glfwInit() == GL_FALSE)
-    {
-        if (DebugLogEnable)
-        {
-            LAppPal::PrintLogLn("Can't initilize GLFW");
-        }
-        return GL_FALSE;
+    _windowWidth = RenderTargetWidth;
+    _windowHeight = RenderTargetHeight;
+
+    if (!SetupWaylandContext(&_wlContext, RenderTargetWidth, RenderTargetHeight)) {
+        return false;
     }
-
-    // Set Transparent, Borderless Window Hints for Wayland Desktop Pet
-    glfwWindowHint(GLFW_TRANSPARENT_FRAMEBUFFER, GLFW_TRUE);
-    glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
-    glfwWindowHint(GLFW_FLOATING, GLFW_TRUE);
-
-    // Windowの生成_
-    _window = glfwCreateWindow(RenderTargetWidth, RenderTargetHeight, "waifuland", NULL, NULL);
-    if (_window == NULL)
-    {
-        if (DebugLogEnable)
-        {
-            LAppPal::PrintLogLn("Can't create GLFW window.");
-        }
-        glfwTerminate();
-        return GL_FALSE;
-    }
-
-    // Windowのコンテキストをカレントに設定
-    glfwMakeContextCurrent(_window);
-    glfwSwapInterval(1);
 
     glewExperimental = GL_TRUE;
     GLenum err = glewInit();
@@ -92,8 +99,7 @@ bool LAppDelegate::Initialize()
         {
             LAppPal::PrintLogLn("Can't initilize glew. Error: %s", glewGetErrorString(err));
         }
-        glfwTerminate();
-        return GL_FALSE;
+        return false;
     }
 
     //テクスチャサンプリング設定
@@ -104,96 +110,100 @@ bool LAppDelegate::Initialize()
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 
-    //コールバック関数の登録
-    glfwSetMouseButtonCallback(_window, EventHandler::OnMouseCallBack);
-    glfwSetCursorPosCallback(_window, EventHandler::OnMouseCallBack);
-    glfwSetScrollCallback(_window, EventHandler::OnScrollCallBack);
-
-    // ウィンドウサイズ記憶
-    int width, height;
-    glfwGetWindowSize(LAppDelegate::GetInstance()->GetWindow(), &width, &height);
-    _windowWidth = width;
-    _windowHeight = height;
     glViewport(0, 0, _windowWidth, _windowHeight);
 
     // Cubism3の初期化
     InitializeCubism();
-
     SetExecuteAbsolutePath();
-
-    //load model
     LAppLive2DManager::GetInstance();
 
-    //AppViewの初期化
-    _view->Initialize(width, height);
+    _view->Initialize(_windowWidth, _windowHeight);
     _view->InitializeSprite();
 
-    return GL_TRUE;
+    return true;
 }
-
 void LAppDelegate::Release()
 {
-    // Windowの削除
-    glfwDestroyWindow(_window);
-
-    glfwTerminate();
+    CleanWaylandContext(&_wlContext);
 
     delete _textureManager;
     delete _view;
 
-    // リソースを解放
     LAppLive2DManager::ReleaseInstance();
-
-    //Cubism3の解放
     CubismFramework::Dispose();
 }
-
 void LAppDelegate::Run()
 {
-    //メインループ
-    while (glfwWindowShouldClose(_window) == GL_FALSE && !_isEnd)
+    while (!_isEnd) 
     {
-        int width, height;
-        glfwGetWindowSize(LAppDelegate::GetInstance()->GetWindow(), &width, &height);
-        if((_windowWidth!=width || _windowHeight!=height) && width>0 && height>0)
-        {
+        if (wl_display_dispatch_pending(_wlContext.display) == -1) {
+            break;
+        }
+        wl_display_flush(_wlContext.display);
+        
+        int width = _wlContext.width;
+        int height = _wlContext.height;
+
+        if((_windowWidth!=width || _windowHeight!=height) && width>0 && height>0) {
             _view->Initialize(width, height);
             _view->ResizeSprite();
-            // レンダーターゲットを破棄する（次フレームで新サイズで再作成される）
             _view->DestroySpriteRenderTarget();
-            // モデルのレンダーターゲットのサイズ変更
             LAppLive2DManager::GetInstance()->SetRenderTargetSize(width, height);
             _windowWidth = width;
             _windowHeight = height;
         }
+
         glViewport(0, 0, _windowWidth, _windowHeight);
 
-        // 時間更新
+        
+        int hx, hy;
+        if (GetHyprlandCursor(hx, hy) && !_wlContext.outputs.empty()) {
+            int current_idx = _wlContext.current_output_index;
+            WaylandContext::OutputInfo* out = _wlContext.outputs[current_idx];
+            
+            if (_isDraggingWindow) {
+                if (hx < out->x || hx >= out->x + out->width ||
+                    hy < out->y || hy >= out->y + out->height) {
+                    
+                    extern void SwitchWaylandOutputToMonitor(int, int);
+                    SwitchWaylandOutputToMonitor(hx, hy);
+                    
+                    int new_idx = _wlContext.current_output_index;
+                    if (new_idx != current_idx) {
+                        WaylandContext::OutputInfo* new_out = _wlContext.outputs[new_idx];
+                        _dragStartX -= (out->x - new_out->x);
+                        _dragStartY -= (out->y - new_out->y);
+                        float x_shift = (float)(out->x - new_out->x) / (float)_windowWidth * 2.0f;
+                        float y_shift = -(float)(out->y - new_out->y) / (float)_windowHeight * 2.0f;
+                        _modelX -= x_shift / _modelScale;
+                        _modelY -= y_shift / _modelScale;
+                        out = new_out;
+                    }
+                }
+            }
+            int local_x = hx - out->x;
+            int local_y = hy - out->y;
+            OnMouseCallBack(nullptr, (double)local_x, (double)local_y);
+        }
+
         LAppPal::UpdateTime();
 
-        // 画面の初期化
+        // 画面の初期化 -> Transparent!
         glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glClearDepth(1.0);
 
-        //描画更新
         _view->Render();
 
-        // バッファの入れ替え
-        glfwSwapBuffers(_window);
-
-        // Poll for and process events
-        glfwPollEvents();
+        UpdateWaylandInputRegion(&_wlContext);
+        eglSwapBuffers(_wlContext.egl_display, _wlContext.egl_surface);
     }
-
     Release();
-
     LAppDelegate::ReleaseInstance();
 }
-
 LAppDelegate::LAppDelegate():
     _cubismOption(),
-    _window(NULL),
+    
     _captured(false),
     _mouseX(0.0f),
     _mouseY(0.0f),
@@ -206,7 +216,10 @@ LAppDelegate::LAppDelegate():
     _windowStartX(0),
     _windowStartY(0),
     _lookCenterX(0.5f),
-    _lookCenterY(0.5f)
+    _lookCenterY(0.5f),
+    _modelScale(1.0f),
+    _modelX(0.0f),
+    _modelY(0.0f)
 {
     _executeAbsolutePath = "";
     _view = new LAppView();
@@ -233,19 +246,50 @@ void LAppDelegate::InitializeCubism()
     //default proj
     CubismMatrix44 projection;
 
-    LAppPal::UpdateTime();
+    
+        int hx, hy;
+        if (GetHyprlandCursor(hx, hy) && !_wlContext.outputs.empty()) {
+            int current_idx = _wlContext.current_output_index;
+            WaylandContext::OutputInfo* out = _wlContext.outputs[current_idx];
+            
+            if (_isDraggingWindow) {
+                if (hx < out->x || hx >= out->x + out->width ||
+                    hy < out->y || hy >= out->y + out->height) {
+                    
+                    extern void SwitchWaylandOutputToMonitor(int, int);
+                    SwitchWaylandOutputToMonitor(hx, hy);
+                    
+                    int new_idx = _wlContext.current_output_index;
+                    if (new_idx != current_idx) {
+                        WaylandContext::OutputInfo* new_out = _wlContext.outputs[new_idx];
+                        _dragStartX -= (out->x - new_out->x);
+                        _dragStartY -= (out->y - new_out->y);
+                        float x_shift = (float)(out->x - new_out->x) / (float)_windowWidth * 2.0f;
+                        float y_shift = -(float)(out->y - new_out->y) / (float)_windowHeight * 2.0f;
+                        _modelX -= x_shift / _modelScale;
+                        _modelY -= y_shift / _modelScale;
+                        out = new_out;
+                    }
+                }
+            }
+            int local_x = hx - out->x;
+            int local_y = hy - out->y;
+            OnMouseCallBack(nullptr, (double)local_x, (double)local_y);
+        }
+
+        LAppPal::UpdateTime();
 }
 
-void LAppDelegate::OnMouseCallBack(GLFWwindow* window, int button, int action, int modify)
+void LAppDelegate::OnMouseCallBack(void* window, int button, int action, int modify)
 {
     if (_view == NULL)
     {
         return;
     }
     
-    if (button == GLFW_MOUSE_BUTTON_LEFT)
+    if (button == 0)
     {
-        if (GLFW_PRESS == action)
+        if (1 == action)
         {
             _captured = true;
             _view->OnTouchesBegan(_mouseX, _mouseY);
@@ -253,13 +297,13 @@ void LAppDelegate::OnMouseCallBack(GLFWwindow* window, int button, int action, i
             // Start drag
             _isDraggingWindow = true;
             double curX, curY;
-            glfwGetCursorPos(window, &curX, &curY);
+            curX = _mouseX; curY = _mouseY;
             _dragStartX = static_cast<int>(curX);
             _dragStartY = static_cast<int>(curY);
-            glfwGetWindowPos(window, &_windowStartX, &_windowStartY);
+            _windowStartX = _wlContext.margin_left; _windowStartY = _wlContext.margin_top;
 
         }
-        else if (GLFW_RELEASE == action)
+        else if (0 == action)
         {
             if (_captured)
             {
@@ -267,7 +311,7 @@ void LAppDelegate::OnMouseCallBack(GLFWwindow* window, int button, int action, i
                 _isDraggingWindow = false;
 
                 double curX, curY;
-                glfwGetCursorPos(window, &curX, &curY);
+                curX = _mouseX; curY = _mouseY;
                 if (abs(static_cast<int>(curX) - _dragStartX) < 10 && abs(static_cast<int>(curY) - _dragStartY) < 10)
                 {
                     _view->OnTouchesEnded(_mouseX, _mouseY); // Trigger Tap
@@ -279,22 +323,22 @@ void LAppDelegate::OnMouseCallBack(GLFWwindow* window, int button, int action, i
             }
         }
     }
-    else if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_RELEASE)
+    else if (button == 1 && action == 0)
     {
         // Switch Models
         LAppLive2DManager::GetInstance()->NextScene();
     }
-    else if (button == GLFW_MOUSE_BUTTON_MIDDLE && action == GLFW_PRESS)
+    else if (button == 2 && action == 1)
     {
         // Set Look Center!
         int width, height;
-        glfwGetWindowSize(window, &width, &height);
+        width = _windowWidth; height = _windowHeight;
         _lookCenterX = _mouseX / (float)width;
         _lookCenterY = _mouseY / (float)height;
     }
 }
 
-void LAppDelegate::OnMouseCallBack(GLFWwindow* window, double x, double y)
+void LAppDelegate::OnMouseCallBack(void* window, double x, double y)
 {
     _mouseX = static_cast<float>(x);
     _mouseY = static_cast<float>(y);
@@ -306,7 +350,7 @@ void LAppDelegate::OnMouseCallBack(GLFWwindow* window, double x, double y)
 
     // Calculate viewX / viewY based on look center
     int width, height;
-    glfwGetWindowSize(window, &width, &height);
+    width = _windowWidth; height = _windowHeight;
     
     float viewX = (_mouseX / (float)width) - _lookCenterX;
     float viewY = (_mouseY / (float)height) - _lookCenterY;
@@ -317,56 +361,46 @@ void LAppDelegate::OnMouseCallBack(GLFWwindow* window, double x, double y)
 
     if (_captured && _isDraggingWindow)
     {
-        int currentX, currentY;
-        glfwGetWindowPos(window, &currentX, &currentY);
-        
-        int globalMouseX = currentX + static_cast<int>(x);
-        int globalMouseY = currentY + static_cast<int>(y);
-        
-        int globalDragStartX = _windowStartX + _dragStartX;
-        int globalDragStartY = _windowStartY + _dragStartY;
-        
-        int deltaX = globalMouseX - globalDragStartX;
-        int deltaY = globalMouseY - globalDragStartY;
+        double curX = x;
+        double curY = y;
+        int deltaX = static_cast<int>(curX) - _dragStartX;
+        int deltaY = static_cast<int>(curY) - _dragStartY;
         
         if (deltaX != 0 || deltaY != 0) {
-            glfwSetWindowPos(window, _windowStartX + deltaX, _windowStartY + deltaY);
+            float dx_logical = (float)deltaX / (float)_windowWidth * 2.0f;
+            float dy_logical = -(float)deltaY / (float)_windowHeight * 2.0f; // Y axis is flipped in OpenGL
+            
+            _modelX += dx_logical / _modelScale;
+            _modelY += dy_logical / _modelScale;
+            
+            _dragStartX = static_cast<int>(curX);
+            _dragStartY = static_cast<int>(curY);
         }
     }
 }
 
-void LAppDelegate::OnScrollCallBack(GLFWwindow* window, double xoffset, double yoffset)
+void LAppDelegate::OnScrollCallBack(void* window, double xoffset, double yoffset)
 {
-    int width, height;
-    glfwGetWindowSize(window, &width, &height);
-
     float scale = 1.0f + (yoffset * 0.1f);
-    int newWidth = static_cast<int>(width * scale);
-    int newHeight = static_cast<int>(height * scale);
-
-    // Limit size
-    if (newWidth > 300 && newHeight > 300 && newWidth < 4000)
-    {
-        glfwSetWindowSize(window, newWidth, newHeight);
-    }
+    _modelScale *= scale;
+    if (_modelScale < 0.1f) _modelScale = 0.1f;
+    if (_modelScale > 10.0f) _modelScale = 10.0f;
 }
-
 
 void LAppDelegate::GetClientSize(int& rWidth, int& rHeight)
 {
-    glfwGetWindowSize(LAppDelegate::GetInstance()->GetWindow(), &rWidth, &rHeight);
+    rWidth = GetInstance()->_windowWidth;
+    rHeight = GetInstance()->_windowHeight;
 }
 
 void LAppDelegate::SetExecuteAbsolutePath()
 {
     char path[1024];
     ssize_t len = readlink("/proc/self/exe", path, 1024 - 1);
-
     if (len != -1)
     {
         path[len] = '\0';
     }
-
     this->_executeAbsolutePath = dirname(path);
     this->_executeAbsolutePath += "/";
 }

@@ -49,7 +49,7 @@ public:
   * @param[in]       action            実行結果
   * @param[in]       modify
   */
-  void OnMouseCallBack(GLFWwindow* window, int button, int action, int modify);
+  void OnMouseCallBack(void* window, int button, int action, int modify);
 
   /**
   * @brief   OpenGL用 glfwSetCursorPosCallback用関数。
@@ -58,7 +58,7 @@ public:
   * @param[in]       x                 x座標
   * @param[in]       y                 x座標
   */
-  void OnMouseCallBack(GLFWwindow* window, double x, double y);
+  void OnMouseCallBack(void* window, double x, double y);
 };
 
 class EventHandler
@@ -67,7 +67,7 @@ public:
     /**
     * @brief   glfwSetMouseButtonCallback用コールバック関数。
     */
-    static void OnMouseCallBack(GLFWwindow* window, int button, int action, int modify)
+    static void OnMouseCallBack(void* window, int button, int action, int modify)
     {
         MouseActionManager::GetInstance()->OnMouseCallBack(window, button, action, modify);
     }
@@ -75,7 +75,7 @@ public:
     /**
     * @brief   glfwSetCursorPosCallback用コールバック関数。
     */
-    static void OnMouseCallBack(GLFWwindow* window, double x, double y)
+    static void OnMouseCallBack(void* window, double x, double y)
     {
         MouseActionManager::GetInstance()->OnMouseCallBack(window, x, y);
     }

@@ -17,9 +17,6 @@
 
 int main(int argc, char* argv[])
 {
-    // WAYLAND_DISPLAY hack
-    unsetenv("WAYLAND_DISPLAY");
-
     // Parse models_dir
     std::string modelsDir = "";
     for (int i = 1; i < argc; ++i) {

@@ -416,7 +416,7 @@ void CubismUserModelExtend::SetupTextures()
     GetRenderer<Rendering::CubismRenderer_OpenGLES2>()->IsPremultipliedAlpha(false);
 }
 
-void CubismUserModelExtend::ModelOnUpdate(GLFWwindow* window)
+void CubismUserModelExtend::ModelOnUpdate(void* window)
 {
     int width, height;
     // ウィンドウサイズを取得

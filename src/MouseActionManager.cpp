@@ -39,7 +39,7 @@ MouseActionManager::~MouseActionManager()
 {
 }
 
-void MouseActionManager::OnMouseCallBack(GLFWwindow* window, int button, int action, int modify)
+void MouseActionManager::OnMouseCallBack(void* window, int button, int action, int modify)
 {
     if (GLFW_MOUSE_BUTTON_LEFT != button)
     {
@@ -64,7 +64,7 @@ void MouseActionManager::OnMouseCallBack(GLFWwindow* window, int button, int act
     }
 }
 
-void MouseActionManager::OnMouseCallBack(GLFWwindow* window, double x, double y)
+void MouseActionManager::OnMouseCallBack(void* window, double x, double y)
 {
     _mouseX = static_cast<float>(x);
     _mouseY = static_cast<float>(y);

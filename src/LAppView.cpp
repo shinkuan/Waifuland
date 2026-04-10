@@ -125,7 +125,7 @@ void LAppView::InitializeSprite()
     GLuint programId = _spriteShader->GetShaderId();
 
     int width, height;
-    glfwGetWindowSize(LAppDelegate::GetInstance()->GetWindow(), &width, &height);
+    width = LAppDelegate::GetInstance()->GetWindowWidth(); height = LAppDelegate::GetInstance()->GetWindowHeight();
 
     // 画面全体を覆うサイズ
     float x = width * 0.5f;
@@ -185,7 +185,7 @@ void LAppView::PreModelDraw(LAppModel &refModel)
         if (!useTarget->IsValid())
         {// 描画ターゲット内部未作成の場合はここで作成
             int bufWidth, bufHeight;
-            glfwGetFramebufferSize(LAppDelegate::GetInstance()->GetWindow(), &bufWidth, &bufHeight);
+            bufWidth = LAppDelegate::GetInstance()->GetWindowWidth(); bufHeight = LAppDelegate::GetInstance()->GetWindowHeight();
 
             if(bufWidth!=0 && bufHeight!=0)
             {
@@ -270,7 +270,7 @@ void LAppView::ResizeSprite()
 
     // 描画領域サイズ
     int width, height;
-    glfwGetWindowSize(LAppDelegate::GetInstance()->GetWindow(), &width, &height);
+    width = LAppDelegate::GetInstance()->GetWindowWidth(); height = LAppDelegate::GetInstance()->GetWindowHeight();
 
     float x = 0.0f;
     float y = 0.0f;
