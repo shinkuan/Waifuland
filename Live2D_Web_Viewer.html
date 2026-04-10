@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live2D 網頁檢視器</title>
+    
+    <!-- Tailwind CSS for UI styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- JSZip for parsing the uploaded zip file -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    
+    <!-- PIXI.js (Required by pixi-live2d-display) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/6.5.9/browser/pixi.min.js"></script>
+    
+    <!-- Live2D Cubism Core (Required to parse .moc3 files) -->
+    <script src="https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js"></script>
+    
+    <!-- PIXI Live2D Display Library (Cubism 4 specific build to avoid Cubism 2 errors) -->
+    <script src="https://cdn.jsdelivr.net/npm/pixi-live2d-display/dist/cubism4.min.js"></script>
+
+    <style>
+        /* Custom scrollbar for a cleaner look */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #4b5563;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #6b7280;
+        }
+
+        /* Checkerboard pattern for the canvas background to easily spot transparency */
+        .checkerboard {
+            background-color: #2a2a2a;
+            background-image: 
+                linear-gradient(45deg, #1f1f1f 25%, transparent 25%, transparent 75%, #1f1f1f 75%, #1f1f1f),
+                linear-gradient(45deg, #1f1f1f 25%, transparent 25%, transparent 75%, #1f1f1f 75%, #1f1f1f);
+            background-size: 20px 20px;
+            background-position: 0 0, 10px 10px;
+        }
+
+        /* Range slider styling overrides */
+        input[type=range] {
+            accent-color: #3b82f6;
+        }
+        
+        /* 避免在拖曳畫布時觸發瀏覽器的返回上一頁或滾動行為 */
+        #canvas-container {
+            touch-action: none;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white h-screen flex overflow-hidden font-sans">
+
+    <!-- Sidebar for Controls -->
+    <div class="w-80 bg-gray-800 border-r border-gray-700 flex flex-col h-full z-10 shadow-xl shrink-0">
+        
+        <!-- Header -->
+        <div class="p-5 border-b border-gray-700">
+            <h1 class="text-xl font-bold tracking-wide">Live2D 檢視器</h1>
+            <p class="text-xs text-gray-400 mt-1">請上傳包含 .moc3 的 .zip 壓縮檔</p>
+        </div>
+
+        <!-- Upload Section -->
+        <div class="p-5 border-b border-gray-700 bg-gray-800/50">
+            <div id="drop-zone" class="border-2 border-dashed border-gray-600 rounded-lg p-6 text-center cursor-pointer hover:border-blue-500 hover:bg-gray-700/50 transition-colors">
+                <svg class="mx-auto h-10 w-10 text-gray-400 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                </svg>
+                <p class="text-sm font-medium">點擊或拖曳 .zip 至此處</p>
+                <p class="text-xs text-gray-500 mt-1">包含 .moc3, .json 以及貼圖</p>
+                <input type="file" id="file-input" accept=".zip" class="hidden">
+            </div>
+            
+            <!-- Status Messages -->
+            <div id="status-message" class="mt-3 text-sm text-center hidden"></div>
+        </div>
+
+        <!-- Parameters Section -->
+        <div class="p-5 flex-grow overflow-y-auto flex flex-col">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wider">模型參數 (Parameters)</h2>
+                <button id="reset-btn" class="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded text-white transition-colors hidden">
+                    重置全部
+                </button>
+            </div>
+            
+            <!-- List of sliders will be injected here -->
+            <div id="params-list" class="flex flex-col gap-4">
+                <p class="text-sm text-gray-500 italic text-center mt-10">請先載入模型以檢視參數。</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Canvas Area -->
+    <div id="canvas-container" class="flex-grow relative checkerboard flex items-center justify-center">
+        <!-- Canvas injected by PIXI -->
+        <div id="loading-overlay" class="absolute inset-0 bg-gray-900/80 flex items-center justify-center hidden z-20">
+            <div class="flex flex-col items-center">
+                <svg class="animate-spin h-10 w-10 text-blue-500 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <span class="text-lg font-medium text-white tracking-widest">載入中 (LOADING)...</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Expose PIXI globally as required by pixi-live2d-display
+        window.PIXI = PIXI;
+
+        // --- CORE FIX: BYPASS XHR/NETWORK REQUESTS COMPLETELY ---
+        // Sandboxed environments strictly block Blob URLs and standard cross-origin Data URIs on fetch/XHR.
+        // This plugin completely hijacks the internal PIXI Loader. 
+        PIXI.Loader.registerPlugin({
+            pre: function(resource, next) {
+                const url = resource.url;
+                if (url.startsWith('data:')) {
+                    resource.crossOrigin = false; 
+                    
+                    if (url.includes('#ext=')) {
+                        const ext = url.split('#ext=')[1].split('&')[0].toLowerCase();
+                        resource.extension = ext;
+                        
+                        if (ext === 'png') {
+                            resource.loadType = PIXI.LoaderResource.LOAD_TYPE.IMAGE;
+                        } else {
+                            try {
+                                const base64Data = url.split(',')[1].split('#')[0];
+                                const binaryStr = atob(base64Data);
+                                
+                                if (ext.includes('json')) {
+                                    const decodedJsonStr = decodeURIComponent(escape(binaryStr));
+                                    resource.data = JSON.parse(decodedJsonStr);
+                                    resource.complete(); 
+                                    return next(); 
+                                } else {
+                                    const len = binaryStr.length;
+                                    const bytes = new Uint8Array(len);
+                                    for (let i = 0; i < len; i++) {
+                                        bytes[i] = binaryStr.charCodeAt(i);
+                                    }
+                                    resource.data = bytes.buffer;
+                                    resource.complete(); 
+                                    return next(); 
+                                }
+                            } catch (e) {
+                                console.error("Error parsing data URI manually:", e);
+                            }
+                        }
+                    }
+                }
+                next();
+            }
+        });
+
+        // Configuration and State
+        let currentModel = null;
+        let userOverrides = {}; 
+        let activeDataUrls = []; 
+        
+        // Setup PIXI Application
+        const canvasContainer = document.getElementById('canvas-container');
+        const app = new PIXI.Application({
+            resizeTo: canvasContainer,
+            backgroundAlpha: 0,
+            autoDensity: true,
+            resolution: window.devicePixelRatio || 1
+        });
+        canvasContainer.appendChild(app.view);
+
+        // 建立一個 Container 來包裝模型，方便進行縮放(Zoom)與平移(Pan)
+        const modelContainer = new PIXI.Container();
+        app.stage.addChild(modelContainer);
+
+        // --- 滑鼠互動實作 (Pan & Zoom) ---
+        const canvas = app.view;
+        canvas.style.cursor = 'grab';
+        
+        let isDragging = false;
+        let dragStart = { x: 0, y: 0 };
+        let containerStart = { x: 0, y: 0 };
+
+        // 縮放 (Zoom)
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            // 決定縮放比例 (向上滾放大，向下滾縮小)
+            const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
+            modelContainer.scale.x *= zoomFactor;
+            modelContainer.scale.y *= zoomFactor;
+        });
+
+        // 拖曳平移 (Pan)
+        canvas.addEventListener('pointerdown', (e) => {
+            isDragging = true;
+            dragStart.x = e.clientX;
+            dragStart.y = e.clientY;
+            containerStart.x = modelContainer.x;
+            containerStart.y = modelContainer.y;
+            canvas.style.cursor = 'grabbing';
+        });
+
+        window.addEventListener('pointermove', (e) => {
+            if (!isDragging) return;
+            const dx = e.clientX - dragStart.x;
+            const dy = e.clientY - dragStart.y;
+            modelContainer.x = containerStart.x + dx;
+            modelContainer.y = containerStart.y + dy;
+        });
+
+        window.addEventListener('pointerup', () => {
+            isDragging = false;
+            canvas.style.cursor = 'grab';
+        });
+        // --- 結束滑鼠互動實作 ---
+
+        // DOM Elements
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const statusMessage = document.getElementById('status-message');
+        const paramsList = document.getElementById('params-list');
+        const resetBtn = document.getElementById('reset-btn');
+
+        // Event Listeners for File Input & Drag and Drop
+        dropZone.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
+
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, preventDefaults, false);
+        });
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropZone.addEventListener(eventName, () => dropZone.classList.add('border-blue-500', 'bg-gray-700/50'), false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, () => dropZone.classList.remove('border-blue-500', 'bg-gray-700/50'), false);
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            handleFiles(e.dataTransfer.files);
+        });
+
+        resetBtn.addEventListener('click', () => {
+            userOverrides = {};
+            if (currentModel) buildParameterSliders(currentModel);
+        });
+
+        function cleanupPreviousModel() {
+            if (currentModel) {
+                modelContainer.removeChild(currentModel);
+                currentModel.destroy();
+                currentModel = null;
+            }
+            
+            activeDataUrls.forEach(url => {
+                if (PIXI.utils.TextureCache[url]) {
+                    PIXI.utils.TextureCache[url].destroy(true);
+                    delete PIXI.utils.TextureCache[url];
+                }
+            });
+            activeDataUrls = [];
+        }
+
+        // Main Logic: Parse Zip and Load Model
+        async function handleFiles(files) {
+            if (files.length === 0) return;
+            const file = files[0];
+            
+            if (!file.name.toLowerCase().endsWith('.zip')) {
+                showStatus('請上傳 .zip 檔案。', true);
+                return;
+            }
+
+            try {
+                showLoading(true);
+                showStatus('正在解壓縮 ZIP...', false);
+
+                const zip = new JSZip();
+                const loadedZip = await zip.loadAsync(file);
+                
+                // 1. Find .model3.json
+                const modelJsonEntry = Object.values(loadedZip.files).find(entry => entry.name.endsWith('.model3.json') && !entry.dir);
+                if (!modelJsonEntry) {
+                    throw new Error("無法在 ZIP 中找到 .model3.json 檔案。");
+                }
+
+                // Determine base path (e.g., "role1/")
+                const lastSlashIdx = modelJsonEntry.name.lastIndexOf('/');
+                const basePath = lastSlashIdx !== -1 ? modelJsonEntry.name.substring(0, lastSlashIdx + 1) : "";
+
+                // Parse the JSON
+                const modelJsonStr = await modelJsonEntry.async("string");
+                const modelJson = JSON.parse(modelJsonStr);
+
+                showStatus('正在處理模型資源...', false);
+
+                // Helper to extract ZIP files directly to Base64 Data URIs 
+                async function getDataUrl(relativePath) {
+                    if (!relativePath) return relativePath;
+                    let cleanPath = relativePath.replace(/^\.\//, '');
+                    const fullPath = basePath + cleanPath;
+                    
+                    let entry = loadedZip.file(fullPath);
+                    if (!entry) {
+                        const fallbackEntry = Object.values(loadedZip.files).find(e => e.name.endsWith(cleanPath) && !e.dir);
+                        if (fallbackEntry) {
+                            entry = fallbackEntry;
+                        } else {
+                            console.warn("Asset not found in ZIP:", fullPath);
+                            return relativePath;
+                        }
+                    }
+                    
+                    let mimeType = "application/octet-stream";
+                    const ext = cleanPath.split('.').pop().toLowerCase();
+                    if (ext === 'png') mimeType = "image/png";
+                    else if (ext.includes('json')) mimeType = "application/json";
+                    else if (ext === 'wav') mimeType = "audio/wav";
+                    else if (ext === 'mp3') mimeType = "audio/mpeg";
+                    
+                    const base64 = await entry.async("base64");
+                    const finalUrl = `data:${mimeType};base64,${base64}#ext=${ext}`;
+                    
+                    activeDataUrls.push(finalUrl); 
+                    return finalUrl;
+                }
+
+                // 2. Replace all relative paths in JSON with absolute Base64 Data URLs
+                const refs = modelJson.FileReferences;
+                if (refs) {
+                    if (refs.Moc) refs.Moc = await getDataUrl(refs.Moc);
+                    if (refs.Physics) refs.Physics = await getDataUrl(refs.Physics);
+                    if (refs.Pose) refs.Pose = await getDataUrl(refs.Pose);
+                    if (refs.DisplayInfo) refs.DisplayInfo = await getDataUrl(refs.DisplayInfo);
+                    if (refs.UserData) refs.UserData = await getDataUrl(refs.UserData);
+                    
+                    if (refs.Textures) {
+                        for (let i = 0; i < refs.Textures.length; i++) {
+                            const dataUrl = await getDataUrl(refs.Textures[i]);
+                            refs.Textures[i] = dataUrl;
+
+                            await new Promise((resolve, reject) => {
+                                const img = new Image();
+                                img.onload = () => {
+                                    const baseTex = new PIXI.BaseTexture(img);
+                                    const tex = new PIXI.Texture(baseTex);
+                                    PIXI.Texture.addToCache(tex, dataUrl); 
+                                    resolve();
+                                };
+                                img.onerror = () => reject(new Error("無法解碼圖片貼圖。"));
+                                img.src = dataUrl; 
+                            });
+                        }
+                    }
+                    if (refs.Motions) {
+                        for (const group in refs.Motions) {
+                            for (const motion of refs.Motions[group]) {
+                                if (motion.File) motion.File = await getDataUrl(motion.File);
+                                if (motion.Sound) motion.Sound = await getDataUrl(motion.Sound);
+                            }
+                        }
+                    }
+                    if (refs.Expressions) {
+                        for (const exp of refs.Expressions) {
+                            if (exp.File) exp.File = await getDataUrl(exp.File);
+                        }
+                    }
+                }
+
+                showStatus('正在將模型載入至畫面...', false);
+                cleanupPreviousModel();
+
+                // 3. Create a final Data URI for the modified model3.json
+                const jsonStr = JSON.stringify(modelJson);
+                const base64Json = btoa(unescape(encodeURIComponent(jsonStr)));
+                const finalJsonUrlToLoad = `data:application/json;base64,${base64Json}#ext=model3.json`;
+                activeDataUrls.push(finalJsonUrlToLoad);
+
+                // Create Live2D model
+                currentModel = await PIXI.live2d.Live2DModel.from(finalJsonUrlToLoad);
+                
+                // 加入至 Model Container 中
+                modelContainer.addChild(currentModel);
+                fitModelToCanvas(currentModel);
+                
+                userOverrides = {};
+                buildParameterSliders(currentModel);
+
+                // --- 重要修復：確保參數覆寫在模型自我更新之後發生 ---
+                currentModel.on('afterModelUpdate', () => {
+                    const coreModel = currentModel.internalModel.coreModel;
+                    if (coreModel && coreModel.parameters && coreModel.parameters.values) {
+                        const values = coreModel.parameters.values;
+                        // 應用所有的使用者滑條覆寫值
+                        for (const index in userOverrides) {
+                            values[index] = userOverrides[index];
+                        }
+                    }
+                });
+                
+                showStatus('模型載入成功！', false);
+                setTimeout(() => showStatus('', false), 3000); 
+
+            } catch (error) {
+                console.error("載入模型失敗:", error);
+                showStatus('發生錯誤: ' + error.message, true);
+                cleanupPreviousModel(); 
+            } finally {
+                showLoading(false);
+                fileInput.value = '';
+            }
+        }
+
+        // Generate UI sliders based on model's internal parameters
+        function buildParameterSliders(model) {
+            paramsList.innerHTML = '';
+            
+            if (!model.internalModel || !model.internalModel.coreModel) {
+                paramsList.innerHTML = '<p class="text-sm text-red-500">內部模型讀取失敗。</p>';
+                return;
+            }
+
+            const coreModel = model.internalModel.coreModel;
+            const p = coreModel.parameters;
+
+            // 重要修復：檢查 count 以防止 Array 判斷失效
+            if (!p || p.count === undefined || p.count === 0) {
+                paramsList.innerHTML = '<p class="text-sm text-yellow-500">這個模型沒有定義任何參數或參數格式不受支援。</p>';
+                return;
+            }
+
+            resetBtn.classList.remove('hidden');
+
+            // 重要修復：改用 for 迴圈來取代 .forEach，以兼容 Cubism4 Array-like 物件
+            for (let index = 0; index < p.count; index++) {
+                const id = p.ids[index];
+                const min = p.minimumValues[index];
+                const max = p.maximumValues[index];
+                const def = p.defaultValues[index];
+
+                const container = document.createElement('div');
+                
+                const labelContainer = document.createElement('div');
+                labelContainer.className = 'flex justify-between items-center mb-1';
+                
+                const label = document.createElement('span');
+                // 移除前綴 Param 以讓版面更乾淨
+                label.textContent = id.replace('Param', ''); 
+                label.title = id;
+                label.className = 'text-xs text-gray-300 truncate pr-2 cursor-help select-none';
+                
+                const valueDisplay = document.createElement('span');
+                valueDisplay.textContent = def.toFixed(2);
+                valueDisplay.className = 'text-xs font-mono text-gray-400 w-12 text-right shrink-0 select-none';
+
+                labelContainer.appendChild(label);
+                labelContainer.appendChild(valueDisplay);
+
+                const slider = document.createElement('input');
+                slider.type = 'range';
+                slider.min = min;
+                slider.max = max;
+                slider.step = (max - min) / 1000;
+                slider.value = def;
+                slider.className = 'w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer';
+
+                // 滑動時紀錄覆寫值
+                slider.addEventListener('input', (e) => {
+                    const numVal = parseFloat(e.target.value);
+                    valueDisplay.textContent = numVal.toFixed(2);
+                    userOverrides[index] = numVal; 
+                });
+
+                // 雙擊重置該參數
+                slider.addEventListener('dblclick', () => {
+                    slider.value = def;
+                    valueDisplay.textContent = def.toFixed(2);
+                    delete userOverrides[index]; 
+                });
+
+                container.appendChild(labelContainer);
+                container.appendChild(slider);
+                paramsList.appendChild(container);
+            }
+        }
+
+        // Adjust model transform to center and fit within the viewport
+        function fitModelToCanvas(model) {
+            // 重置模型原有的錨點，防止雙重偏移推至角落
+            model.anchor.set(0); 
+
+            // 取得模型真實內部的邊界大小
+            const bounds = model.getLocalBounds();
+            const w = bounds.width || model.width;
+            const h = bounds.height || model.height;
+            const bx = bounds.width ? bounds.x : 0;
+            const by = bounds.height ? bounds.y : 0;
+
+            // 將模型「內部中心」精準對齊到 Container 的 (0,0)
+            model.x = -bx - w / 2;
+            model.y = -by - h / 2;
+
+            // 將 Container 放置於畫布正中央
+            modelContainer.position.set(app.renderer.width / 2, app.renderer.height / 2);
+
+            // 依照 Container 的比例縮放，使其佔用畫面高度的 80%
+            if (h > 0) {
+                const scale = (app.renderer.height * 0.8) / h;
+                modelContainer.scale.set(scale, scale);
+            }
+        }
+
+        const resizeObserver = new ResizeObserver(entries => {
+            for (let entry of entries) {
+                app.renderer.resize(entry.contentRect.width, entry.contentRect.height);
+                if (currentModel) {
+                    fitModelToCanvas(currentModel);
+                }
+            }
+        });
+        resizeObserver.observe(canvasContainer);
+
+        function showLoading(visible) {
+            if (visible) loadingOverlay.classList.remove('hidden');
+            else loadingOverlay.classList.add('hidden');
+        }
+
+        function showStatus(message, isError) {
+            statusMessage.textContent = message;
+            statusMessage.classList.remove('hidden');
+            if (isError) {
+                statusMessage.classList.add('text-red-400');
+                statusMessage.classList.remove('text-green-400');
+            } else {
+                statusMessage.classList.add('text-green-400');
+                statusMessage.classList.remove('text-red-400');
+            }
+        }
+    </script>
+</body>
+</html>
