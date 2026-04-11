@@ -17,6 +17,14 @@
 
 int main(int argc, char* argv[])
 {
+    // waifuland toggle
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "toggle") == 0 || strcmp(argv[i], "--toggle") == 0) {
+            system("killall -s SIGUSR1 waifuland");
+            return 0;
+        }
+    }
+
     // Parse models_dir
     std::string modelsDir = "";
     for (int i = 1; i < argc; ++i) {
