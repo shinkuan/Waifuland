@@ -122,6 +122,21 @@ The binary will be at `build/bin/waifuland`.
 | **Middle-click** | Switch skin (if any) |
 | **Scroll wheel** | Zoom in/out |
 
+### Toggling Visibility
+
+You can hide and show your Live2D model (along with its click-through input region) by sending a `SIGUSR1` signal to the background process. When hidden, it uses virtually no resources.
+
+```bash
+kill -SIGUSR1 $(pgrep -x waifuland)
+```
+
+**Hyprland keybind example**  
+Add this to your `~/.config/hypr/hyprland.conf` to easily show/hide your model:
+```ini
+# Toggle waifuland visibility with Super + W
+bind = SUPER, W, exec, kill -SIGUSR1 $(pgrep -x waifuland)
+```
+
 ## Model Setup
 
 Place Live2D models in your models directory. Each model should be in its own subfolder containing a `.model3.json` file:
