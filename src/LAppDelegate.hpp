@@ -162,7 +162,11 @@ private:
     int _windowStartY;
     float _lookCenterX;
     float _lookCenterY;
-    public:
+    
+public:
+    bool _isHidden = false;
+    void ToggleHidden() { _isHidden = !_isHidden; }
+
     float _modelScale;
     float _modelX;
     float _modelY;

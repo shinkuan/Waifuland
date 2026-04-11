@@ -2,6 +2,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 #include <string.h>
+#include <signal.h>
 /**
  * Copyright(c) Live2D Inc. All rights reserved.
  *
@@ -32,6 +33,11 @@ namespace {
     LAppDelegate* s_instance = NULL;
 }
 
+static void HandleToggleSignal(int) {
+    if (s_instance) {
+        s_instance->ToggleHidden();
+    }
+}
 
 bool GetHyprlandCursor(int& x, int& y) {
     const char* sig = getenv("HYPRLAND_INSTANCE_SIGNATURE");
@@ -89,6 +95,8 @@ bool LAppDelegate::Initialize()
     {
         LAppPal::PrintLogLn("START");
     }
+
+    signal(SIGUSR1, HandleToggleSignal);
 
     _windowWidth = RenderTargetWidth;
     _windowHeight = RenderTargetHeight;
@@ -178,10 +186,16 @@ void LAppDelegate::Run()
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glClearDepth(1.0);
 
-        _view->Render();
+        if (!_isHidden) {
+            _view->Render();
+        }
 
         UpdateWaylandInputRegion(&_wlContext);
         eglSwapBuffers(_wlContext.egl_display, _wlContext.egl_surface);
+        
+        if (_isHidden) {
+            usleep(33000); // Reduce CPU usage when hidden
+        }
     }
     Release();
     LAppDelegate::ReleaseInstance();
