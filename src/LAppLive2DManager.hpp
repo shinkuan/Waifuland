@@ -136,8 +136,24 @@ private:
     */
     virtual ~LAppLive2DManager();
 
+    /**
+    * @brief   モデルキャッシュを初期化する
+    */
+    void InitModelCache();
+
+    /**
+    * @brief   次のモデルを事前読み込みする
+    */
+    void PreloadNextModel();
+
+    /**
+    * @brief   モデル数が4を超える場合、現在と次以外のキャッシュを解放する
+    */
+    void EvictExcessModels();
+
     Csm::CubismMatrix44* _viewMatrix; ///< モデル描画に用いるView行列
-    Csm::csmVector<LAppModel*> _models; ///< モデルインスタンスのコンテナ
+    Csm::csmVector<LAppModel*> _models; ///< 表示中モデルのコンテナ（所有権はキャッシュ側）
+    Csm::csmVector<LAppModel*> _modelCache; ///< モデルキャッシュ（インデックス対応、NULLは未読み込み）
     Csm::csmInt32 _sceneIndex; ///< 表示するシーンのインデックス値
 
     Csm::csmVector<Csm::csmString> _modelDir; ///< モデルディレクトリ名のコンテナ
