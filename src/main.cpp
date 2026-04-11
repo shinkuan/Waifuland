@@ -23,6 +23,10 @@ int main(int argc, char* argv[])
             system("killall -s SIGUSR1 waifuland");
             return 0;
         }
+        if (strcmp(argv[i], "focus") == 0 || strcmp(argv[i], "--focus") == 0) {
+            system("killall -s SIGUSR2 waifuland");
+            return 0;
+        }
     }
 
     // Parse models_dir

@@ -442,3 +442,147 @@ void SwitchWaylandOutputToMonitor(int hx, int hy) {
     eglMakeCurrent(g_wl->egl_display, g_wl->egl_surface, g_wl->egl_surface, g_wl->egl_context);
     eglSwapInterval(g_wl->egl_display, 1);
 }
+
+static bool GetFocusedMonitorName(char* name, size_t name_len) {
+    switch (GetCompositorType()) {
+    case COMPOSITOR_HYPRLAND: {
+        FILE* fp = popen("hyprctl monitors -j", "r");
+        if (!fp) return false;
+        char buf[16384] = {0};
+        size_t total = 0;
+        while (total < sizeof(buf) - 1) {
+            size_t n = fread(buf + total, 1, sizeof(buf) - 1 - total, fp);
+            if (n == 0) break;
+            total += n;
+        }
+        pclose(fp);
+        // Parse JSON array: find monitor with "focused":true, extract its "name"
+        char* pos = buf;
+        while ((pos = strstr(pos, "\"focused\"")) != nullptr) {
+            char* val = pos + strlen("\"focused\"");
+            // skip whitespace and colon
+            while (*val == ' ' || *val == ':' || *val == '\t') val++;
+            if (strncmp(val, "true", 4) == 0) {
+                // Search backwards for "name"
+                // Find the enclosing object start
+                char* obj_start = pos;
+                int brace_count = 0;
+                while (obj_start > buf) {
+                    obj_start--;
+                    if (*obj_start == '}') brace_count++;
+                    if (*obj_start == '{') {
+                        if (brace_count == 0) break;
+                        brace_count--;
+                    }
+                }
+                char* name_key = strstr(obj_start, "\"name\"");
+                if (name_key && name_key < pos) {
+                    char* colon = strchr(name_key + 6, ':');
+                    if (colon) {
+                        char* quote1 = strchr(colon, '"');
+                        if (quote1) {
+                            char* quote2 = strchr(quote1 + 1, '"');
+                            if (quote2) {
+                                size_t len = quote2 - quote1 - 1;
+                                if (len < name_len) {
+                                    strncpy(name, quote1 + 1, len);
+                                    name[len] = '\0';
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            pos++;
+        }
+        return false;
+    }
+    case COMPOSITOR_SWAY: {
+        FILE* fp = popen("swaymsg -t get_outputs", "r");
+        if (!fp) return false;
+        char buf[4096] = {0};
+        size_t total = 0;
+        while (total < sizeof(buf) - 1) {
+            size_t n = fread(buf + total, 1, sizeof(buf) - 1 - total, fp);
+            if (n == 0) break;
+            total += n;
+        }
+        pclose(fp);
+        // Parse JSON: find output with "focused":true
+        char* pos = buf;
+        while ((pos = strstr(pos, "\"focused\"")) != nullptr) {
+            char* val = pos + strlen("\"focused\"");
+            while (*val == ' ' || *val == ':' || *val == '\t') val++;
+            if (strncmp(val, "true", 4) == 0) {
+                char* obj_start = pos;
+                int brace_count = 0;
+                while (obj_start > buf) {
+                    obj_start--;
+                    if (*obj_start == '}') brace_count++;
+                    if (*obj_start == '{') {
+                        if (brace_count == 0) break;
+                        brace_count--;
+                    }
+                }
+                char* name_key = strstr(obj_start, "\"name\"");
+                if (name_key && name_key < pos) {
+                    char* colon = strchr(name_key + 6, ':');
+                    if (colon) {
+                        char* quote1 = strchr(colon, '"');
+                        if (quote1) {
+                            char* quote2 = strchr(quote1 + 1, '"');
+                            if (quote2) {
+                                size_t len = quote2 - quote1 - 1;
+                                if (len < name_len) {
+                                    strncpy(name, quote1 + 1, len);
+                                    name[len] = '\0';
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            pos++;
+        }
+        return false;
+    }
+    default:
+        return false;
+    }
+}
+
+void MoveToFocusedMonitor() {
+    if (!g_wl || g_wl->outputs.empty()) return;
+
+    char focused_name[32] = {0};
+    if (!GetFocusedMonitorName(focused_name, sizeof(focused_name))) {
+        LAppPal::PrintLogLn("[Wayland] Could not determine focused monitor");
+        return;
+    }
+
+    LAppPal::PrintLogLn("[Wayland] Focused monitor: %s", focused_name);
+
+    int target_idx = -1;
+    for (size_t i = 0; i < g_wl->outputs.size(); i++) {
+        if (strcmp(g_wl->outputs[i]->name, focused_name) == 0) {
+            target_idx = i;
+            break;
+        }
+    }
+
+    if (target_idx < 0) {
+        LAppPal::PrintLogLn("[Wayland] Focused monitor '%s' not found in outputs", focused_name);
+        return;
+    }
+
+    if (target_idx == g_wl->current_output_index) {
+        LAppPal::PrintLogLn("[Wayland] Already on focused monitor (%s)", focused_name);
+        return;
+    }
+
+    // Use the center of the target monitor to trigger the switch
+    WaylandContext::OutputInfo* out = g_wl->outputs[target_idx];
+    SwitchWaylandOutputToMonitor(out->x + out->width / 2, out->y + out->height / 2);
+}

@@ -61,3 +61,4 @@ bool SetupWaylandContext(WaylandContext* wl, int width, int height);
 void CleanWaylandContext(WaylandContext* wl);
 
 void SwitchWaylandOutput(int direction);
+void MoveToFocusedMonitor();

@@ -132,13 +132,14 @@ The binary will be at `build/bin/waifuland`.
 
 Waifuland runs on any Wayland compositor that supports the `wlr-layer-shell` protocol. Some features require compositor-specific IPC and are only available on Hyprland:
 
-| Feature | Hyprland | Sway / Other wlroots |
-|---|---|---|
-| Overlay rendering | Yes | Yes |
-| Click-through transparency | Yes | Yes |
-| Mouse drag / tap / scroll | Yes | Yes |
-| Global cursor tracking (eyes follow cursor anywhere) | Yes | No (only when cursor is over model) |
-| Cross-monitor drag | Yes | No |
+| Feature | Hyprland | Sway | Other wlroots |
+|---|---|---|---|
+| Overlay rendering | Yes | Yes | Yes |
+| Click-through transparency | Yes | Yes | Yes |
+| Mouse drag / tap / scroll | Yes | Yes | Yes |
+| Global cursor tracking (eyes follow cursor anywhere) | Yes | No | No |
+| Cross-monitor drag | Yes | No | No |
+| Move to focused monitor | Yes | Yes | No |
 
 The compositor is auto-detected at startup. Feature availability is logged to the console.
 
@@ -154,11 +155,25 @@ killall -s SIGUSR1 waifuland
 ./build/bin/waifuland toggle
 ```
 
-**Hyprland keybind example**  
-Add this to your `~/.config/hypr/hyprland.conf` to easily show/hide your model:
+### Move to Focused Monitor
+
+Move the model to whichever monitor currently has focus by sending a `SIGUSR2` signal. This works on Hyprland and Sway.
+
+```bash
+kill -SIGUSR2 $(pgrep -x waifuland)
+# Or
+killall -s SIGUSR2 waifuland
+# Or using the included focus command:
+./build/bin/waifuland focus
+```
+
+**Hyprland keybind examples**  
+Add these to your `~/.config/hypr/hyprland.conf`:
 ```ini
 # Toggle waifuland visibility with Super + W
 bind = SUPER, W, exec, killall -s SIGUSR1 waifuland
+# Move waifuland to focused monitor with Super + Shift + W
+bind = SUPER SHIFT, W, exec, killall -s SIGUSR2 waifuland
 ```
 
 ## Model Setup
