@@ -73,6 +73,7 @@ LAppLive2DManager::LAppLive2DManager()
 {
     _viewMatrix = new CubismMatrix44();
     SetUpModel();
+    InitModelCache();
 
     ChangeScene(_sceneIndex);
 }
@@ -86,12 +87,17 @@ LAppLive2DManager::~LAppLive2DManager()
 
 void LAppLive2DManager::ReleaseAllModel()
 {
-    for (csmUint32 i = 0; i < _models.GetSize(); i++)
-    {
-        delete _models[i];
-    }
-
     _models.Clear();
+
+    for (csmUint32 i = 0; i < _modelCache.GetSize(); i++)
+    {
+        if (_modelCache[i] != NULL)
+        {
+            delete _modelCache[i];
+            _modelCache[i] = NULL;
+        }
+    }
+    _modelCache.Clear();
 }
 
 void LAppLive2DManager::SetUpModel()
@@ -135,6 +141,62 @@ void LAppLive2DManager::SetUpModel()
     }
     closedir(pDir);
     qsort(_modelDir.GetPtr(), _modelDir.GetSize(), sizeof(csmString), CompareCsmString);
+}
+
+void LAppLive2DManager::InitModelCache()
+{
+    for (csmUint32 i = 0; i < _modelCache.GetSize(); i++)
+    {
+        if (_modelCache[i] != NULL)
+        {
+            delete _modelCache[i];
+        }
+    }
+    _modelCache.Clear();
+
+    for (csmInt32 i = 0; i < _modelDir.GetSize(); i++)
+    {
+        _modelCache.PushBack(NULL);
+    }
+}
+
+void LAppLive2DManager::PreloadNextModel()
+{
+    if (GetModelDirSize() <= 1) return;
+
+    csmInt32 nextIndex = (_sceneIndex + 1) % GetModelDirSize();
+
+    if (_modelCache[nextIndex] != NULL) return;
+
+    const csmString& model = _modelDir[nextIndex];
+    LAppPal::PrintLogLn("[APP]preloading model: %s", model.GetRawString());
+
+    csmString modelPath(LAppDefine::ModelsDir.c_str());
+    modelPath += model;
+    modelPath.Append(1, '/');
+
+    csmString modelJsonName(model);
+    modelJsonName += ".model3.json";
+
+    _modelCache[nextIndex] = new LAppModel();
+    _modelCache[nextIndex]->LoadAssets(modelPath.GetRawString(), modelJsonName.GetRawString());
+}
+
+void LAppLive2DManager::EvictExcessModels()
+{
+    if (GetModelDirSize() <= 4) return;
+
+    csmInt32 nextIndex = (_sceneIndex + 1) % GetModelDirSize();
+
+    for (csmInt32 i = 0; i < (csmInt32)_modelCache.GetSize(); i++)
+    {
+        if (i != _sceneIndex && i != nextIndex && _modelCache[i] != NULL)
+        {
+            LAppPal::PrintLogLn("[APP]evicting cached model: %s", _modelDir[i].GetRawString());
+            delete _modelCache[i];
+            _modelCache[i] = NULL;
+        }
+    }
 }
 
 csmVector<csmString> LAppLive2DManager::GetModelDir() const
@@ -281,22 +343,36 @@ void LAppLive2DManager::ChangeScene(Csm::csmInt32 index)
         LAppPal::PrintLogLn("[APP]model index: %d", _sceneIndex);
     }
 
-    // ModelDir[]に保持したディレクトリ名から
-    // model3.jsonのパスを決定する.
-    // ディレクトリ名とmodel3.jsonの名前を一致させておくこと.
-    const csmString& model = _modelDir[index];
-    LAppPal::PrintLogLn("[APP]_modelDir: %s", model.GetRawString());
+    // モデルがキャッシュにない場合は読み込む
+    if (_modelCache[index] == NULL)
+    {
+        const csmString& model = _modelDir[index];
+        LAppPal::PrintLogLn("[APP]loading model: %s", model.GetRawString());
 
-    csmString modelPath(LAppDefine::ModelsDir.c_str());
-    modelPath += model;
-    modelPath.Append(1, '/');
+        csmString modelPath(LAppDefine::ModelsDir.c_str());
+        modelPath += model;
+        modelPath.Append(1, '/');
 
-    csmString modelJsonName(model);
-    modelJsonName += ".model3.json";
+        csmString modelJsonName(model);
+        modelJsonName += ".model3.json";
 
-    ReleaseAllModel();
-    _models.PushBack(new LAppModel());
-    _models[0]->LoadAssets(modelPath.GetRawString(), modelJsonName.GetRawString());
+        _modelCache[index] = new LAppModel();
+        _modelCache[index]->LoadAssets(modelPath.GetRawString(), modelJsonName.GetRawString());
+    }
+    else
+    {
+        LAppPal::PrintLogLn("[APP]using cached model: %s", _modelDir[index].GetRawString());
+    }
+
+    // 表示モデルリストを更新
+    _models.Clear();
+    _models.PushBack(_modelCache[index]);
+
+    // モデル数が4を超える場合、現在と次以外のキャッシュを解放
+    EvictExcessModels();
+
+    // 次のモデルを事前読み込み
+    PreloadNextModel();
 
     /*
      * モデル半透明表示を行うサンプルを提示する。
