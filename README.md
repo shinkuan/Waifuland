@@ -27,7 +27,8 @@ https://github.com/user-attachments/assets/95dfdedc-4957-4bb7-b79f-f3addd97a6db
 
 - **Wayland-native overlay** — renders as a layer-shell surface, always on top of your desktop
 - **Click-through transparency** — only the Live2D model area receives pointer events; everything else passes through
-- **Multi-output support** — switch between monitors
+- **Multi-compositor support** — works on any Wayland compositor supporting `wlr-layer-shell` (Hyprland, Sway, river, etc.)
+- **Multi-output support** — switch between monitors (Hyprland)
 - **Interactive** — responds to mouse drag, tap, and scroll input
 - **Motion & expression** — supports idle animations, lip-sync, eye-blink, physics, and expressions
 - **Configurable model directory** — load models from any path via CLI flag or XDG config
@@ -36,7 +37,7 @@ https://github.com/user-attachments/assets/95dfdedc-4957-4bb7-b79f-f3addd97a6db
 
 | Dependency | Notes |
 |---|---|
-| **Linux with Wayland compositor** | Must support `wlr-layer-shell-v1` (Sway, Hyprland, river, etc.) |
+| **Linux with Wayland compositor** | Must support `wlr-layer-shell-v1` (Hyprland, Sway, river, etc.) |
 | **Live2D Cubism SDK for Native** | Download from [live2d.com/sdk](https://www.live2d.com/en/sdk/about/) (proprietary, not bundled) |
 | **C++ compiler** | GCC or Clang with C++14 support |
 | **CMake** | >= 3.16 |
@@ -126,6 +127,20 @@ The binary will be at `build/bin/waifuland`.
 | **Right-click** | Switch to next model |
 | **Middle-click** | Switch skin (if any) |
 | **Scroll wheel** | Zoom in/out |
+
+### Compositor Compatibility
+
+Waifuland runs on any Wayland compositor that supports the `wlr-layer-shell` protocol. Some features require compositor-specific IPC and are only available on Hyprland:
+
+| Feature | Hyprland | Sway / Other wlroots |
+|---|---|---|
+| Overlay rendering | Yes | Yes |
+| Click-through transparency | Yes | Yes |
+| Mouse drag / tap / scroll | Yes | Yes |
+| Global cursor tracking (eyes follow cursor anywhere) | Yes | No (only when cursor is over model) |
+| Cross-monitor drag | Yes | No |
+
+The compositor is auto-detected at startup. Feature availability is logged to the console.
 
 ### Toggling Visibility
 

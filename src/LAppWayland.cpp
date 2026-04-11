@@ -1,3 +1,7 @@
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+#include <string.h>
 #include "LAppWayland.hpp"
 #include "LAppDelegate.hpp"
 #include "LAppPal.hpp"
@@ -140,6 +144,80 @@ static const struct wl_registry_listener registry_listener = {
 
 WaylandContext* g_wl = nullptr;
 
+// --- Compositor Detection ---
+static CompositorType s_compositorType = COMPOSITOR_GENERIC;
+static bool s_compositorDetected = false;
+
+CompositorType DetectCompositor() {
+    if (getenv("HYPRLAND_INSTANCE_SIGNATURE")) {
+        s_compositorType = COMPOSITOR_HYPRLAND;
+        LAppPal::PrintLogLn("[Wayland] Detected compositor: Hyprland");
+        LAppPal::PrintLogLn("[Wayland]   Global cursor tracking: enabled");
+        LAppPal::PrintLogLn("[Wayland]   Cross-monitor drag: enabled");
+    } else if (getenv("SWAYSOCK") || getenv("I3SOCK")) {
+        s_compositorType = COMPOSITOR_SWAY;
+        LAppPal::PrintLogLn("[Wayland] Detected compositor: Sway");
+        LAppPal::PrintLogLn("[Wayland]   Global cursor tracking: not available (model eyes follow cursor only when over model)");
+        LAppPal::PrintLogLn("[Wayland]   Cross-monitor drag: not available");
+    } else {
+        s_compositorType = COMPOSITOR_GENERIC;
+        LAppPal::PrintLogLn("[Wayland] Detected compositor: generic wlroots-compatible");
+        LAppPal::PrintLogLn("[Wayland]   Global cursor tracking: not available (model eyes follow cursor only when over model)");
+        LAppPal::PrintLogLn("[Wayland]   Cross-monitor drag: not available");
+    }
+    s_compositorDetected = true;
+    return s_compositorType;
+}
+
+CompositorType GetCompositorType() {
+    if (!s_compositorDetected) {
+        DetectCompositor();
+    }
+    return s_compositorType;
+}
+
+// --- Global Cursor Position (compositor-specific) ---
+static bool GetHyprlandCursor(int& x, int& y) {
+    const char* sig = getenv("HYPRLAND_INSTANCE_SIGNATURE");
+    if (!sig) return false;
+    int sock = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (sock < 0) return false;
+    struct sockaddr_un addr;
+    addr.sun_family = AF_UNIX;
+    const char* xdg = getenv("XDG_RUNTIME_DIR");
+    if (xdg) {
+        sprintf(addr.sun_path, "%s/hypr/%s/.socket.sock", xdg, sig);
+    } else {
+        sprintf(addr.sun_path, "/tmp/hypr/%s/.socket.sock", sig);
+    }
+    if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(sock); return false; }
+    const char* cmd = "-j/cursorpos";
+    if (write(sock, cmd, strlen(cmd)) < 0) { close(sock); return false; }
+    char buf[256] = {0};
+    int n = read(sock, buf, 255);
+    close(sock);
+    if (n <= 0) return false;
+    char* x_str = strstr(buf, "\"x\":");
+    char* y_str = strstr(buf, "\"y\":");
+    if (x_str && y_str) {
+        x = atoi(x_str + 4);
+        y = atoi(y_str + 4);
+        return true;
+    }
+    return false;
+}
+
+bool GetGlobalCursorPosition(int& x, int& y) {
+    switch (GetCompositorType()) {
+    case COMPOSITOR_HYPRLAND:
+        return GetHyprlandCursor(x, y);
+    case COMPOSITOR_SWAY:
+    case COMPOSITOR_GENERIC:
+    default:
+        return false;
+    }
+}
+
 bool SetupWaylandContext(WaylandContext* wl, int width, int height) {
     g_wl = wl;
     wl->display = wl_display_connect(nullptr);
@@ -253,26 +331,20 @@ void CleanWaylandContext(WaylandContext* wl) {
     if (wl->display) wl_display_disconnect(wl->display);
 }
 
-extern void UpdateMonitorCoordinates();
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-void UpdateMonitorCoordinates() {
+static void UpdateMonitorCoordinatesHyprland() {
     if (!g_wl) return;
     FILE* fp = popen("hyprctl monitors", "r");
     if (!fp) return;
-    
+
     char line[512];
     char current_monitor[128] = {0};
-    
+
     while (fgets(line, sizeof(line), fp)) {
         if (strncmp(line, "Monitor ", 8) == 0) {
             char* space = strchr(line + 8, ' ');
             if (space) {
                 int len = space - (line + 8);
-                if (len < sizeof(current_monitor)) {
+                if (len < (int)sizeof(current_monitor)) {
                     strncpy(current_monitor, line + 8, len);
                     current_monitor[len] = '\0';
                 }
@@ -282,7 +354,7 @@ void UpdateMonitorCoordinates() {
             if (at_pos) {
                 int x = 0, y = 0;
                 if (sscanf(at_pos + 4, "%dx%d", &x, &y) == 2) {
-                    for (int i = 0; i < g_wl->outputs.size(); i++) {
+                    for (size_t i = 0; i < g_wl->outputs.size(); i++) {
                         WaylandContext::OutputInfo* out = g_wl->outputs[i];
                         if (strcmp(out->name, current_monitor) == 0) {
                             out->x = x;
@@ -294,6 +366,21 @@ void UpdateMonitorCoordinates() {
         }
     }
     pclose(fp);
+}
+
+void UpdateMonitorCoordinates() {
+    if (!g_wl) return;
+    switch (GetCompositorType()) {
+    case COMPOSITOR_HYPRLAND:
+        UpdateMonitorCoordinatesHyprland();
+        break;
+    case COMPOSITOR_SWAY:
+    case COMPOSITOR_GENERIC:
+    default:
+        // On non-Hyprland compositors, output coordinates are already
+        // populated by Wayland's wl_output geometry events — no extra work needed.
+        break;
+    }
 }
 
 void SwitchWaylandOutputToMonitor(int hx, int hy) {

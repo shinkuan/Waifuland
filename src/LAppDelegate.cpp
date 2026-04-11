@@ -1,7 +1,3 @@
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <unistd.h>
-#include <string.h>
 #include <signal.h>
 /**
  * Copyright(c) Live2D Inc. All rights reserved.
@@ -39,36 +35,6 @@ static void HandleToggleSignal(int) {
     }
 }
 
-bool GetHyprlandCursor(int& x, int& y) {
-    const char* sig = getenv("HYPRLAND_INSTANCE_SIGNATURE");
-    if (!sig) return false;
-    int sock = socket(AF_UNIX, SOCK_STREAM, 0);
-    if(sock < 0) return false;
-    struct sockaddr_un addr;
-    addr.sun_family = AF_UNIX;
-    const char* xdg = getenv("XDG_RUNTIME_DIR");
-    if (xdg) {
-        sprintf(addr.sun_path, "%s/hypr/%s/.socket.sock", xdg, sig);
-    } else {
-        sprintf(addr.sun_path, "/tmp/hypr/%s/.socket.sock", sig);
-    }
-    if(connect(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(sock); return false; }
-    const char* cmd = "-j/cursorpos";
-    if(write(sock, cmd, strlen(cmd)) < 0) { close(sock); return false; }
-    char buf[256] = {0};
-    int n = read(sock, buf, 255);
-    close(sock);
-    if (n <= 0) return false;
-    char* x_str = strstr(buf, "\"x\":");
-    char* y_str = strstr(buf, "\"y\":");
-    if (x_str && y_str) {
-        x = atoi(x_str + 4);
-        y = atoi(y_str + 4);
-        return true;
-    }
-    return false;
-}
-
 LAppDelegate* LAppDelegate::GetInstance()
 {
     if (s_instance == NULL)
@@ -97,6 +63,8 @@ bool LAppDelegate::Initialize()
     }
 
     signal(SIGUSR1, HandleToggleSignal);
+
+    DetectCompositor();
 
     _windowWidth = RenderTargetWidth;
     _windowHeight = RenderTargetHeight;
@@ -170,7 +138,7 @@ void LAppDelegate::Run()
 
         
         int hx, hy;
-        if (GetHyprlandCursor(hx, hy) && !_wlContext.outputs.empty()) {
+        if (GetGlobalCursorPosition(hx, hy) && !_wlContext.outputs.empty()) {
             int current_idx = _wlContext.current_output_index;
             WaylandContext::OutputInfo* out = _wlContext.outputs[current_idx];
             
@@ -247,7 +215,7 @@ void LAppDelegate::InitializeCubism()
 
     
         int hx, hy;
-        if (GetHyprlandCursor(hx, hy) && !_wlContext.outputs.empty()) {
+        if (GetGlobalCursorPosition(hx, hy) && !_wlContext.outputs.empty()) {
             int current_idx = _wlContext.current_output_index;
             WaylandContext::OutputInfo* out = _wlContext.outputs[current_idx];
             
@@ -291,7 +259,7 @@ void LAppDelegate::OnMouseCallBack(void* window, int button, int action, int mod
                 // Execute screen switch on release
                 int hx, hy;
                 bool is_drag = _isDraggingWindow;
-                bool got_cursor = GetHyprlandCursor(hx, hy);
+                bool got_cursor = GetGlobalCursorPosition(hx, hy);
                 bool has_outputs = !_wlContext.outputs.empty();
                 LAppPal::PrintLogLn("[Debug] Release: is_drag=%d, got_cursor=%d, has_outputs=%d, hx=%d, hy=%d", 
                     (int)is_drag, (int)got_cursor, (int)has_outputs, hx, hy);
