@@ -46,6 +46,17 @@ struct WaylandContext {
     int margin_top = 0;
 };
 
+enum CompositorType {
+    COMPOSITOR_HYPRLAND,
+    COMPOSITOR_SWAY,
+    COMPOSITOR_GENERIC
+};
+
+CompositorType DetectCompositor();
+CompositorType GetCompositorType();
+
+bool GetGlobalCursorPosition(int& x, int& y);
+
 bool SetupWaylandContext(WaylandContext* wl, int width, int height);
 void CleanWaylandContext(WaylandContext* wl);
 
