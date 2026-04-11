@@ -128,13 +128,17 @@ You can hide and show your Live2D model (along with its click-through input regi
 
 ```bash
 kill -SIGUSR1 $(pgrep -x waifuland)
+# Or
+killall -s SIGUSR1 waifuland
+# Or using the included toggle command:
+./build/bin/waifuland toggle
 ```
 
 **Hyprland keybind example**  
 Add this to your `~/.config/hypr/hyprland.conf` to easily show/hide your model:
 ```ini
 # Toggle waifuland visibility with Super + W
-bind = SUPER, W, exec, kill -SIGUSR1 $(pgrep -x waifuland)
+bind = SUPER, W, exec, killall -s SIGUSR1 waifuland
 ```
 
 ## Model Setup
