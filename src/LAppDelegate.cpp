@@ -166,26 +166,6 @@ void LAppDelegate::Run()
             int current_idx = _wlContext.current_output_index;
             WaylandContext::OutputInfo* out = _wlContext.outputs[current_idx];
             
-            if (_isDraggingWindow) {
-                if (hx < out->x || hx >= out->x + out->width ||
-                    hy < out->y || hy >= out->y + out->height) {
-                    
-                    extern void SwitchWaylandOutputToMonitor(int, int);
-                    SwitchWaylandOutputToMonitor(hx, hy);
-                    
-                    int new_idx = _wlContext.current_output_index;
-                    if (new_idx != current_idx) {
-                        WaylandContext::OutputInfo* new_out = _wlContext.outputs[new_idx];
-                        _dragStartX -= (out->x - new_out->x);
-                        _dragStartY -= (out->y - new_out->y);
-                        float x_shift = (float)(out->x - new_out->x) / (float)_windowHeight * 2.0f;
-                        float y_shift = -(float)(out->y - new_out->y) / (float)_windowHeight * 2.0f;
-                        _modelX -= x_shift / _modelScale;
-                        _modelY -= y_shift / _modelScale;
-                        out = new_out;
-                    }
-                }
-            }
             int local_x = hx - out->x;
             int local_y = hy - out->y;
             OnMouseCallBack(nullptr, (double)local_x, (double)local_y);
@@ -257,26 +237,6 @@ void LAppDelegate::InitializeCubism()
             int current_idx = _wlContext.current_output_index;
             WaylandContext::OutputInfo* out = _wlContext.outputs[current_idx];
             
-            if (_isDraggingWindow) {
-                if (hx < out->x || hx >= out->x + out->width ||
-                    hy < out->y || hy >= out->y + out->height) {
-                    
-                    extern void SwitchWaylandOutputToMonitor(int, int);
-                    SwitchWaylandOutputToMonitor(hx, hy);
-                    
-                    int new_idx = _wlContext.current_output_index;
-                    if (new_idx != current_idx) {
-                        WaylandContext::OutputInfo* new_out = _wlContext.outputs[new_idx];
-                        _dragStartX -= (out->x - new_out->x);
-                        _dragStartY -= (out->y - new_out->y);
-                        float x_shift = (float)(out->x - new_out->x) / (float)_windowHeight * 2.0f;
-                        float y_shift = -(float)(out->y - new_out->y) / (float)_windowHeight * 2.0f;
-                        _modelX -= x_shift / _modelScale;
-                        _modelY -= y_shift / _modelScale;
-                        out = new_out;
-                    }
-                }
-            }
             int local_x = hx - out->x;
             int local_y = hy - out->y;
             OnMouseCallBack(nullptr, (double)local_x, (double)local_y);
@@ -305,7 +265,7 @@ void LAppDelegate::OnMouseCallBack(void* window, int button, int action, int mod
             curX = _mouseX; curY = _mouseY;
             _dragStartX = static_cast<int>(curX);
             _dragStartY = static_cast<int>(curY);
-            _windowStartX = _wlContext.margin_left; _windowStartY = _wlContext.margin_top;
+            _windowStartX = static_cast<int>(curX); _windowStartY = static_cast<int>(curY);
 
         }
         else if (0 == action)
@@ -313,13 +273,48 @@ void LAppDelegate::OnMouseCallBack(void* window, int button, int action, int mod
             if (_captured)
             {
                 _captured = false;
+
+                // Execute screen switch on release
+                int hx, hy;
+                bool is_drag = _isDraggingWindow;
+                bool got_cursor = GetHyprlandCursor(hx, hy);
+                bool has_outputs = !_wlContext.outputs.empty();
+                LAppPal::PrintLogLn("[Debug] Release: is_drag=%d, got_cursor=%d, has_outputs=%d, hx=%d, hy=%d", 
+                    (int)is_drag, (int)got_cursor, (int)has_outputs, hx, hy);
+                
+                if (is_drag && got_cursor && has_outputs) {
+                    int old_idx = _wlContext.current_output_index;
+                    extern void SwitchWaylandOutputToMonitor(int, int);
+                    SwitchWaylandOutputToMonitor(hx, hy);
+                    int new_idx = _wlContext.current_output_index;
+                    
+                    if (old_idx != new_idx) {
+                        WaylandContext::OutputInfo* out = _wlContext.outputs[old_idx];
+                        WaylandContext::OutputInfo* new_out = _wlContext.outputs[new_idx];
+                        
+                        // Keep physical height identical across different resolution monitors
+                        _modelScale *= (float)out->height / (float)new_out->height;
+
+                        float local_x = hx - new_out->x;
+                        float local_y = hy - new_out->y;
+                        
+                        _modelX = (local_x - new_out->width * 0.5f) / (new_out->height * 0.5f) / _modelScale;
+                        _modelY = -(local_y - new_out->height * 0.5f) / (new_out->height * 0.5f) / _modelScale;
+                    }
+                }
+
                 _isDraggingWindow = false;
 
                 double curX, curY;
                 curX = _mouseX; curY = _mouseY;
-                if (abs(static_cast<int>(curX) - _dragStartX) < 10 && abs(static_cast<int>(curY) - _dragStartY) < 10)
+                int dx = abs(static_cast<int>(curX) - _windowStartX);
+                int dy = abs(static_cast<int>(curY) - _windowStartY);
+                LAppPal::PrintLogLn("[Debug] Tap check: cur(%d,%d) start(%d,%d) dx=%d dy=%d", 
+                    static_cast<int>(curX), static_cast<int>(curY), _windowStartX, _windowStartY, dx, dy);
+                if (dx < 10 && dy < 10)
                 {
-                    _view->OnTouchesEnded(_mouseX, _mouseY); // Trigger Tap
+                    LAppPal::PrintLogLn("[Event] Model Tapped: Cursor (%d, %d)", static_cast<int>(curX), static_cast<int>(curY));
+                      _view->OnTouchesEnded(_mouseX, _mouseY); // Trigger Tap
                 }
                 else 
                 {
@@ -331,15 +326,18 @@ void LAppDelegate::OnMouseCallBack(void* window, int button, int action, int mod
     else if (button == 1 && action == 0)
     {
         // Switch Models
-        LAppLive2DManager::GetInstance()->NextScene();
+        LAppPal::PrintLogLn("[Event] Switch Model Triggered");
+          LAppPal::PrintLogLn("[Event] Switch Model Triggered");
+          LAppLive2DManager::GetInstance()->NextScene();
     }
     else if (button == 2 && action == 1)
     {
         // Set Look Center!
         int width, height;
         width = _windowWidth; height = _windowHeight;
-        _lookCenterX = _mouseX / (float)width;
-        _lookCenterY = _mouseY / (float)height;
+        
+        _lookCenterX = (_mouseX - (_modelX * _modelScale * ((float)height / 2.0f))) / (float)width;
+        _lookCenterY = (_mouseY + (_modelY * _modelScale * ((float)height / 2.0f))) / (float)height;
     }
 }
 
@@ -357,10 +355,11 @@ void LAppDelegate::OnMouseCallBack(void* window, double x, double y)
     int width, height;
     width = _windowWidth; height = _windowHeight;
     
-    float viewX = (_mouseX / (float)width) - _lookCenterX;
-    float viewY = (_mouseY / (float)height) - _lookCenterY;
-    viewX *= 2.0f; // Scale to -1 to 1 roughly
-    viewY *= -2.0f; // Flip Y
+    float faceCenterX = ((float)width * _lookCenterX) + (_modelX * _modelScale * ((float)height / 2.0f));
+    float faceCenterY = ((float)height * _lookCenterY) - (_modelY * _modelScale * ((float)height / 2.0f));
+
+    float viewX = (_mouseX - faceCenterX) / ((float)width / 2.0f);
+    float viewY = -(_mouseY - faceCenterY) / ((float)height / 2.0f);
 
     LAppLive2DManager::GetInstance()->OnDrag(viewX, viewY);
 

@@ -253,18 +253,68 @@ void CleanWaylandContext(WaylandContext* wl) {
     if (wl->display) wl_display_disconnect(wl->display);
 }
 
+extern void UpdateMonitorCoordinates();
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+void UpdateMonitorCoordinates() {
+    if (!g_wl) return;
+    FILE* fp = popen("hyprctl monitors", "r");
+    if (!fp) return;
+    
+    char line[512];
+    char current_monitor[128] = {0};
+    
+    while (fgets(line, sizeof(line), fp)) {
+        if (strncmp(line, "Monitor ", 8) == 0) {
+            char* space = strchr(line + 8, ' ');
+            if (space) {
+                int len = space - (line + 8);
+                if (len < sizeof(current_monitor)) {
+                    strncpy(current_monitor, line + 8, len);
+                    current_monitor[len] = '\0';
+                }
+            }
+        } else if (strstr(line, " at ")) {
+            char* at_pos = strstr(line, " at ");
+            if (at_pos) {
+                int x = 0, y = 0;
+                if (sscanf(at_pos + 4, "%dx%d", &x, &y) == 2) {
+                    for (int i = 0; i < g_wl->outputs.size(); i++) {
+                        WaylandContext::OutputInfo* out = g_wl->outputs[i];
+                        if (strcmp(out->name, current_monitor) == 0) {
+                            out->x = x;
+                            out->y = y;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    pclose(fp);
+}
+
 void SwitchWaylandOutputToMonitor(int hx, int hy) {
     if (!g_wl || g_wl->outputs.empty()) return;
+    UpdateMonitorCoordinates();
     
     int target_idx = g_wl->current_output_index;
     for (int i = 0; i < g_wl->outputs.size(); i++) {
         WaylandContext::OutputInfo* out = g_wl->outputs[i];
+        LAppPal::PrintLogLn("[Wayland] Checking output %d (x:%d, y:%d, w:%d, h:%d) against hx:%d, hy:%d", i, out->x, out->y, out->width, out->height, hx, hy);
         if (hx >= out->x && hx < out->x + out->width && hy >= out->y && hy < out->y + out->height) {
             target_idx = i;
             break;
         }
     }
-    if (target_idx == g_wl->current_output_index) return;
+    
+    if (target_idx == g_wl->current_output_index) {
+        LAppPal::PrintLogLn("[Wayland] Target output same as current (%d), skipping switch", target_idx);
+        return;
+    }
+    LAppPal::PrintLogLn("[Wayland] Switching output from %d to %d", g_wl->current_output_index, target_idx);
     g_wl->current_output_index = target_idx;
     
     if (g_wl->egl_surface != EGL_NO_SURFACE) {
