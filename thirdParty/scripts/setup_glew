@@ -3,7 +3,6 @@
 set -ue
 
 GLEW_VERSION=2.3.1
-GLFW_VERSION=3.4
 
 SCRIPT_PATH=$(cd $(dirname $0) && pwd)
 
@@ -22,17 +21,3 @@ echo 'Extracting...'
 unzip -oq glew.zip
 mv -f glew-* glew
 rm glew.zip
-
-##############
-# Setup GLFW #
-##############
-
-# Download and extract the archive.
-echo "- Setup GLFW $GLFW_VERSION"
-echo 'Downloading...'
-curl -fsSL -o glfw.zip \
-  "https://github.com/glfw/glfw/releases/download/$GLFW_VERSION/glfw-$GLFW_VERSION.zip"
-echo 'Extracting...'
-unzip -oq glfw.zip
-mv -f glfw-* glfw
-rm glfw.zip

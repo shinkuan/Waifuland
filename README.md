@@ -39,7 +39,7 @@ Live2D models float on your desktop with click-through transparency — only the
 | **Wayland development libraries** | `wayland-client`, `wayland-egl`, `wayland-cursor` |
 | **EGL & OpenGL** | `libegl-dev`, `libgl-dev` or equivalent |
 | **wayland-scanner** | Usually part of `wayland-protocols` or `wayland` dev packages |
-| **curl, unzip** | For downloading third-party dependencies (GLEW, GLFW) |
+| **curl, unzip** | For downloading third-party dependencies (GLEW) |
 
 ### Installing system dependencies
 
@@ -93,7 +93,7 @@ chmod +x install.sh
 Or build manually:
 
 ```bash
-cd thirdParty && bash scripts/setup_glew_glfw && cd ..
+cd thirdParty && bash scripts/setup_glew && cd ..
 mkdir -p build && cd build
 cmake ..
 make -j$(nproc)

@@ -145,26 +145,6 @@ else
     success "GLEW $GLEW_VERSION extracted"
 fi
 
-# GLFW
-if [ -d "$THIRDPARTY_DIR/glfw" ] && [ -f "$THIRDPARTY_DIR/glfw/include/GLFW/glfw3.h" ]; then
-    success "GLFW already present, skipping download"
-else
-    info "Downloading GLFW $GLFW_VERSION..."
-    if curl -fsSL -o "$THIRDPARTY_DIR/glfw.zip" \
-        "https://github.com/glfw/glfw/releases/download/$GLFW_VERSION/glfw-$GLFW_VERSION.zip"; then
-        success "GLFW downloaded"
-    else
-        error "Failed to download GLFW. Check your internet connection."
-        exit 1
-    fi
-    info "Extracting GLFW..."
-    unzip -oq "$THIRDPARTY_DIR/glfw.zip" -d "$THIRDPARTY_DIR"
-    rm -f "$THIRDPARTY_DIR/glfw.zip"
-    rm -rf "$THIRDPARTY_DIR/glfw"
-    mv "$THIRDPARTY_DIR/glfw-"* "$THIRDPARTY_DIR/glfw"
-    success "GLFW $GLFW_VERSION extracted"
-fi
-
 # ─── Step 4: Configure with CMake ────────────────────────────────────────────
 
 step "Configuring project with CMake"

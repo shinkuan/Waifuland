@@ -30,7 +30,7 @@ set(CMAKE_CONFIGURATION_TYPES Debug Release
 # Suppress generation of ZERO_CHECK project.
 set(CMAKE_SUPPRESS_REGENERATION ON)
 
-# Suppress GLEW and GLFW process.
+# Suppress GLEW process.
 set(GLEW_EGL ON CACHE BOOL "" FORCE)
 set(BUILD_UTILS OFF CACHE BOOL "" FORCE)
 
