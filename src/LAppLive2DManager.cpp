@@ -265,6 +265,14 @@ void LAppLive2DManager::NextScene()
     ChangeScene(no);
 }
 
+void LAppLive2DManager::SwitchSkin()
+{
+    for (csmUint32 i = 0; i < _models.GetSize(); i++)
+    {
+        _models[i]->SwitchSkin();
+    }
+}
+
 void LAppLive2DManager::ChangeScene(Csm::csmInt32 index)
 {
     _sceneIndex = index;

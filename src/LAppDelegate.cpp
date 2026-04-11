@@ -332,12 +332,9 @@ void LAppDelegate::OnMouseCallBack(void* window, int button, int action, int mod
     }
     else if (button == 2 && action == 1)
     {
-        // Set Look Center!
-        int width, height;
-        width = _windowWidth; height = _windowHeight;
-        
-        _lookCenterX = (_mouseX - (_modelX * _modelScale * ((float)height / 2.0f))) / (float)width;
-        _lookCenterY = (_mouseY + (_modelY * _modelScale * ((float)height / 2.0f))) / (float)height;
+        // Switch Skin
+        LAppPal::PrintLogLn("[Event] Switch Skin Triggered");
+        LAppLive2DManager::GetInstance()->SwitchSkin();
     }
 }
 

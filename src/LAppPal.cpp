@@ -16,6 +16,7 @@
 #include <Model/CubismMoc.hpp>
 #include "LAppDefine.hpp"
 #include "LAppDelegate.hpp"
+#include "EmbeddedShaders.hpp"
 #include <time.h>
 
 using std::endl;
@@ -36,6 +37,16 @@ static double GetCurrentTimeSeconds()
 
 csmByte* LAppPal::LoadFileAsBytes(const string filePath, csmSizeInt* outSize)
 {
+    // Check embedded shaders first
+    const EmbeddedShaders::ShaderData* embedded = EmbeddedShaders::Find(filePath);
+    if (embedded)
+    {
+        char* buf = new char[embedded->size];
+        memcpy(buf, embedded->data, embedded->size);
+        *outSize = static_cast<csmSizeInt>(embedded->size);
+        return reinterpret_cast<csmByte*>(buf);
+    }
+
     //filePath;//
     string pathString = filePath;
     if (!pathString.empty() && pathString[0] != '/') {

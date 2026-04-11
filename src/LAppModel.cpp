@@ -23,6 +23,7 @@
 #include "LAppPal.hpp"
 #include "LAppTextureManager.hpp"
 #include "LAppDelegate.hpp"
+#include <Motion/CubismMotionJson.hpp>
 #include "Motion/CubismBreathUpdater.hpp"
 #include "Motion/CubismLookUpdater.hpp"
 #include "Motion/CubismExpressionUpdater.hpp"
@@ -35,12 +36,15 @@ using namespace Live2D::Cubism::Framework;
 using namespace Live2D::Cubism::Framework::DefaultParameterId;
 using namespace LAppDefine;
 
+const csmFloat32 LAppModel::ExpressionTimeoutSeconds = 5.0f;
+
 LAppModel::LAppModel()
     : LAppModel_Common()
     , _modelSetting(NULL)
     , _userTimeSeconds(0.0f)
     , _motionUpdated(false)
-    , _skinIndex(0)
+    , _currentSkinIndex(0)
+    , _lastExpressionTime(-1.0f)
 {
     if (DebugLogEnable)
     {
@@ -355,8 +359,71 @@ void LAppModel::SetupModel(ICubismModelSetting* setting)
 
     _motionManager->StopAllMotions();
 
+    // Collect all parameter IDs used across skin motion groups
+    CollectSkinParams();
+
     _updating = false;
     _initialized = true;
+}
+
+void LAppModel::CollectSkinParams()
+{
+    _allSkinParamIds.Clear();
+    _allSkinParamDefaults.Clear();
+
+    csmInt32 groupCount = _modelSetting->GetMotionGroupCount();
+    if (groupCount <= 1) return; // No skin switching needed
+
+    // Collect all unique parameter IDs animated by any motion group
+    for (csmInt32 g = 0; g < groupCount; g++)
+    {
+        const csmChar* group = _modelSetting->GetMotionGroupName(g);
+        csmInt32 motionCount = _modelSetting->GetMotionCount(group);
+        for (csmInt32 m = 0; m < motionCount; m++)
+        {
+            csmString path = _modelSetting->GetMotionFileName(group, m);
+            path = _modelHomeDir + path;
+
+            csmSizeInt size;
+            csmByte* buffer = CreateBuffer(path.GetRawString(), &size);
+            if (!buffer) continue;
+
+            CubismMotionJson motionJson(buffer, size);
+            csmInt32 curveCount = motionJson.GetMotionCurveCount();
+            for (csmInt32 c = 0; c < curveCount; c++)
+            {
+                const csmChar* target = motionJson.GetMotionCurveTarget(c);
+                if (strcmp(target, "Parameter") != 0) continue;
+
+                CubismIdHandle paramId = motionJson.GetMotionCurveId(c);
+
+                // Check if already collected
+                bool found = false;
+                for (csmInt32 k = 0; k < _allSkinParamIds.GetSize(); k++)
+                {
+                    if (_allSkinParamIds[k] == paramId)
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found)
+                {
+                    _allSkinParamIds.PushBack(paramId);
+                    // Store the model's default value for this parameter
+                    csmInt32 paramIndex = _model->GetParameterIndex(paramId);
+                    csmFloat32 defaultVal = _model->GetParameterDefaultValue(paramIndex);
+                    _allSkinParamDefaults.PushBack(defaultVal);
+                    LAppPal::PrintLogLn("[APP] Collected skin param: %s (default=%.2f)",
+                        paramId->GetString().GetRawString(), defaultVal);
+                }
+            }
+
+            DeleteBuffer(buffer, path.GetRawString());
+        }
+    }
+
+    LAppPal::PrintLogLn("[APP] Total skin params collected: %d", _allSkinParamIds.GetSize());
 }
 
 void LAppModel::PreloadMotionGroup(const csmChar* group)
@@ -451,6 +518,15 @@ void LAppModel::Update()
 
     //-----------------------------------------------------------------
     _model->LoadParameters(); // 前回セーブされた状態をロード
+
+    // Reset all skin params to defaults before motion update,
+    // so params from a previous skin motion don't persist when
+    // the current motion doesn't animate them.
+    for (csmInt32 i = 0; i < _allSkinParamIds.GetSize(); i++)
+    {
+        _model->SetParameterValue(_allSkinParamIds[i], _allSkinParamDefaults[i]);
+    }
+
     if (_motionManager->IsFinished())
     {
         // モーションの再生がない場合、待機モーションの中からランダムで再生する
@@ -467,6 +543,15 @@ void LAppModel::Update()
     _opacity = _model->GetModelOpacity();
 
     _updateScheduler.OnLateUpdate(_model, deltaTimeSeconds);
+
+    // Expression timeout: revert to default after ExpressionTimeoutSeconds
+    if (_lastExpressionTime >= 0.0f &&
+        (_userTimeSeconds - _lastExpressionTime) > ExpressionTimeoutSeconds)
+    {
+        _expressionManager->StopAllMotions();
+        _lastExpressionTime = -1.0f;
+        if (_debugMode) LAppPal::PrintLogLn("[APP] Expression timed out, reverted to default");
+    }
 
     _model->Update();
 
@@ -619,6 +704,7 @@ void LAppModel::SetExpression(const csmChar* expressionID)
     if (motion != NULL)
     {
         _expressionManager->StartMotion(motion, false);
+        _lastExpressionTime = _userTimeSeconds;
     }
     else
     {
@@ -659,67 +745,41 @@ void LAppModel::ReloadRenderer()
 
 void LAppModel::SwitchSkin()
 {
-    _skinIndex++;
-    if (_skinIndex > 3)
-    {
-        _skinIndex = 0;
+    csmInt32 groupCount = _modelSetting->GetMotionGroupCount();
+    if (groupCount == 0) {
+        LAppPal::PrintLogLn("[APP] No motion groups available for skin switching");
+        return;
     }
-    
-    // Re-setup textures
-    SetupTextures();
+
+    // Reset all skin parameters to their defaults before switching
+    for (csmInt32 i = 0; i < _allSkinParamIds.GetSize(); i++)
+    {
+        _model->SetParameterValue(_allSkinParamIds[i], _allSkinParamDefaults[i]);
+    }
+    _model->SaveParameters();
+
+    _currentSkinIndex = (_currentSkinIndex + 1) % groupCount;
+    const csmChar* group = _modelSetting->GetMotionGroupName(_currentSkinIndex);
+    LAppPal::PrintLogLn("[APP] Switching skin to group: %s (index %d)", group, _currentSkinIndex);
+    StartMotion(group, 0, PriorityForce);
 }
 
 void LAppModel::SetupTextures()
 {
     for (csmInt32 modelTextureNumber = 0; modelTextureNumber < _modelSetting->GetTextureCount(); modelTextureNumber++)
     {
-        // テクスチャ名が空文字だった場合はロード・バインド処理をスキップ
-        if (strcmp(_modelSetting->GetTextureFileName(modelTextureNumber), "") == 0)
-        {
-            continue;
-        }
+        if (strcmp(_modelSetting->GetTextureFileName(modelTextureNumber), "") == 0) continue;
 
-        //OpenGLのテクスチャユニットにテクスチャをロードする
         csmString texturePath = _modelSetting->GetTextureFileName(modelTextureNumber);
-        
-        if (_skinIndex > 0)
-        {
-            // Specifically handling "role1" format: texture_XX.png
-            char buff[64];
-            sprintf(buff, "texture_%02d.png", modelTextureNumber + _skinIndex * 4);
-            csmString altPath = csmString("textures/") + buff;
-
-            // Check if alt texture exists
-            csmString fullPath = _modelHomeDir + altPath;
-            FILE* fp = fopen(fullPath.GetRawString(), "rb");
-            if (fp)
-            {
-                fclose(fp);
-                texturePath = altPath;
-            }
-            else if (_skinIndex > 0 && modelTextureNumber == 0)
-            {
-                // If the first texture in a skin set is missing, loop back to default to avoid blank skins.
-                LAppPal::PrintLogLn("[Skin] Skin index %d texture %s not found, resetting to default.", _skinIndex, altPath.GetRawString());
-                _skinIndex = 0;
-                texturePath = _modelSetting->GetTextureFileName(modelTextureNumber); // Reset to default
-            }
-        }
         texturePath = _modelHomeDir + texturePath;
 
         LAppTextureManager::TextureInfo* texture = LAppDelegate::GetInstance()->GetTextureManager()->CreateTextureFromPngFile(texturePath.GetRawString());
         const csmInt32 glTextueNumber = texture->id;
 
-        //OpenGL
         GetRenderer<Rendering::CubismRenderer_OpenGLES2>()->BindTexture(modelTextureNumber, glTextueNumber);
     }
 
-#ifdef PREMULTIPLIED_ALPHA_ENABLE
-    GetRenderer<Rendering::CubismRenderer_OpenGLES2>()->IsPremultipliedAlpha(true);
-#else
     GetRenderer<Rendering::CubismRenderer_OpenGLES2>()->IsPremultipliedAlpha(false);
-#endif
-
 }
 
 void LAppModel::MotionEventFired(const csmString& eventValue)

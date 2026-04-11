@@ -104,6 +104,11 @@ public:
     void NextScene();
 
     /**
+    * @brief   現在のモデルのスキンを切り替える
+    */
+    void SwitchSkin();
+
+    /**
     * @brief   シーンを切り替える<br>
     *           サンプルアプリケーションではモデルセットの切り替えを行う。
     */

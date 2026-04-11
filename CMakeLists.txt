@@ -115,11 +115,19 @@ target_include_directories(${APP_NAME} PRIVATE
   ${WAYLAND_INCLUDE_DIRS}
 )
 
-# Copy resource directory (and your own models when ready) to build directory.
+# Generate embedded shaders header at configure time.
+set(EMBEDDED_SHADERS_HEADER ${CMAKE_CURRENT_BINARY_DIR}/generated/EmbeddedShaders.hpp)
+execute_process(
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_shaders.sh
+    ${FRAMEWORK_SHADER_PATH}
+    ${SAMPLE_SHADER_PATH}
+    ${EMBEDDED_SHADERS_HEADER}
+)
+target_include_directories(${APP_NAME} PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
+
+# Copy resource directory to build directory.
 add_custom_command(
   TARGET ${APP_NAME}
   POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/models $<TARGET_FILE_DIR:${APP_NAME}>/Resources
-  COMMAND ${CMAKE_COMMAND} -E copy_directory ${SAMPLE_SHADER_PATH} $<TARGET_FILE_DIR:${APP_NAME}>/SampleShaders
-  COMMAND ${CMAKE_COMMAND} -E copy_directory ${FRAMEWORK_SHADER_PATH} $<TARGET_FILE_DIR:${APP_NAME}>/FrameworkShaders
 )

@@ -24,9 +24,10 @@ class LAppModel : public LAppModel_Common
 {
 public:
     /**
-     * @brief Switch skin
+     * @brief Switch to the next skin by cycling through motion groups
      */
-    
+    void SwitchSkin();
+
     /**
      * @brief コンストラクタ
      */
@@ -143,8 +144,6 @@ private:
      */
     void SetupTextures();
     Csm::csmVector<Csm::ACubismMotion*> _autoMotions;
-    Csm::csmInt32 _skinIndex;
-    void SwitchSkin();
 
     /**
      * @brief   モーションデータをグループ名から一括でロードする。<br>
@@ -197,6 +196,16 @@ private:
     const Csm::CubismId* _idParamEyeBallY; ///< パラメータID: ParamEyeBallXY
 
     Csm::csmBool _motionUpdated; ///< モーション更新フラグ
+    Csm::csmInt32 _currentSkinIndex;
+
+    Csm::csmFloat32 _lastExpressionTime; ///< Time when the last expression was set
+    static const Csm::csmFloat32 ExpressionTimeoutSeconds; ///< Seconds before expression reverts to default
+
+    /// All parameter IDs found across skin motion groups, used to reset before switching
+    Csm::csmVector<const Csm::CubismId*> _allSkinParamIds;
+    /// Default values for each skin parameter (from model defaults)
+    Csm::csmVector<Csm::csmFloat32> _allSkinParamDefaults;
+    void CollectSkinParams(); ///< Scan motion group JSONs to collect skin parameter IDs
 
     LAppWavFileHandler_Common _wavFileHandler; ///< wavファイルハンドラ
 
