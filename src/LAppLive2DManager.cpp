@@ -73,6 +73,17 @@ LAppLive2DManager::LAppLive2DManager()
 {
     _viewMatrix = new CubismMatrix44();
     SetUpModel();
+
+    if (_modelDir.GetSize() == 0)
+    {
+        LAppPal::PrintLogLn("[APP]No models found in: %s", LAppDefine::ModelsDir.c_str());
+        LAppPal::PrintLogLn("[APP]Please place your Live2D models in the models directory.");
+        LAppPal::PrintLogLn("[APP]Each model should be in its own subfolder with a .model3.json file.");
+        LAppPal::PrintLogLn("[APP]Example: %s<ModelName>/<ModelName>.model3.json", LAppDefine::ModelsDir.c_str());
+        LAppDelegate::GetInstance()->AppEnd();
+        return;
+    }
+
     InitModelCache();
 
     ChangeScene(_sceneIndex);
@@ -323,6 +334,7 @@ void LAppLive2DManager::OnUpdate() const
 
 void LAppLive2DManager::NextScene()
 {
+    if (GetModelDirSize() == 0) return;
     csmInt32 no = (_sceneIndex + 1) % GetModelDirSize();
     ChangeScene(no);
 }
@@ -337,6 +349,8 @@ void LAppLive2DManager::SwitchSkin()
 
 void LAppLive2DManager::ChangeScene(Csm::csmInt32 index)
 {
+    if (GetModelDirSize() == 0 || index < 0 || index >= GetModelDirSize()) return;
+
     _sceneIndex = index;
     if (DebugLogEnable)
     {
