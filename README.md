@@ -7,6 +7,11 @@ Live2D models float on your desktop with click-through transparency — only the
 <!-- Screenshot or GIF placeholder: place a demo image/gif here -->
 <!-- ![Waifuland Demo](docs/demo.gif) -->
 
+
+https://github.com/user-attachments/assets/95dfdedc-4957-4bb7-b79f-f3addd97a6db
+
+
+
 ## Table of Contents
 
 - [Features](#features)
