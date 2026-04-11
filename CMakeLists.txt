@@ -12,8 +12,7 @@ set(THIRD_PARTY_PATH ${CMAKE_CURRENT_SOURCE_DIR}/thirdParty)
 set(STB_PATH ${THIRD_PARTY_PATH}/stb)
 set(GLEW_PATH ${THIRD_PARTY_PATH}/glew)
 
-# Resources and Shaders from SDK (Since we might need default shaders)
-set(RES_PATH ${SDK_ROOT_PATH}/Samples/Resources)
+# Shaders from SDK
 set(SAMPLE_SHADER_PATH ${SDK_ROOT_PATH}/Samples/OpenGL/Shaders/Standard)
 set(FRAMEWORK_SHADER_PATH ${FRAMEWORK_PATH}/src/Rendering/OpenGL/Shaders/Standard)
 set(COMMON_SRC_PATH ${SDK_ROOT_PATH}/Samples/Common)
@@ -125,9 +124,3 @@ execute_process(
 )
 target_include_directories(${APP_NAME} PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 
-# Copy resource directory to build directory.
-add_custom_command(
-  TARGET ${APP_NAME}
-  POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/models $<TARGET_FILE_DIR:${APP_NAME}>/Resources
-)
