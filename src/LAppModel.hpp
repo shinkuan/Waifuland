@@ -24,6 +24,10 @@ class LAppModel : public LAppModel_Common
 {
 public:
     /**
+     * @brief Switch skin
+     */
+    
+    /**
      * @brief コンストラクタ
      */
     LAppModel();
@@ -138,6 +142,9 @@ private:
      *
      */
     void SetupTextures();
+    Csm::csmVector<Csm::ACubismMotion*> _autoMotions;
+    Csm::csmInt32 _skinIndex;
+    void SwitchSkin();
 
     /**
      * @brief   モーションデータをグループ名から一括でロードする。<br>
@@ -181,7 +188,11 @@ private:
     const Csm::CubismId* _idParamAngleX; ///< パラメータID: ParamAngleX
     const Csm::CubismId* _idParamAngleY; ///< パラメータID: ParamAngleX
     const Csm::CubismId* _idParamAngleZ; ///< パラメータID: ParamAngleX
-    const Csm::CubismId* _idParamBodyAngleX; ///< パラメータID: ParamBodyAngleX
+    const Csm::CubismId* _idParamBodyAngleX; ///< パラメータID: ParamBodyAngleX    
+    
+    const Csm::CubismId* _idParamBodyAngleY; ///< パラメータID: ParamBodyAngleY
+    
+    const Csm::CubismId* _idParamBodyAngleZ; ///< パラメータID: ParamBodyAngleZ
     const Csm::CubismId* _idParamEyeBallX; ///< パラメータID: ParamEyeBallX
     const Csm::CubismId* _idParamEyeBallY; ///< パラメータID: ParamEyeBallXY
 

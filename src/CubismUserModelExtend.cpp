@@ -47,6 +47,8 @@ CubismUserModelExtend::CubismUserModelExtend(const std::string modelDirectoryNam
     _idParamAngleY = CubismFramework::GetIdManager()->GetId(ParamAngleY);
     _idParamAngleZ = CubismFramework::GetIdManager()->GetId(ParamAngleZ);
     _idParamBodyAngleX = CubismFramework::GetIdManager()->GetId(ParamBodyAngleX);
+    _idParamBodyAngleY = CubismFramework::GetIdManager()->GetId(ParamBodyAngleY);
+    _idParamBodyAngleZ = CubismFramework::GetIdManager()->GetId(ParamBodyAngleZ);
     _idParamEyeBallX = CubismFramework::GetIdManager()->GetId(ParamEyeBallX);
     _idParamEyeBallY = CubismFramework::GetIdManager()->GetId(ParamEyeBallY);
 }
@@ -177,6 +179,8 @@ void CubismUserModelExtend::SetupModel(csmUint32 width, csmUint32 height)
         lookParameters.PushBack(CubismLook::LookParameterData(_idParamAngleY, 0.0f, 30.0f));
         lookParameters.PushBack(CubismLook::LookParameterData(_idParamAngleZ, 0.0f, 0.0f, -30.0f));
         lookParameters.PushBack(CubismLook::LookParameterData(_idParamBodyAngleX, 10.0f));
+        lookParameters.PushBack(CubismLook::LookParameterData(_idParamBodyAngleY, 0.0f, 10.0f));
+        lookParameters.PushBack(CubismLook::LookParameterData(_idParamBodyAngleZ, 0.0f, 0.0f, -10.0f));
         lookParameters.PushBack(CubismLook::LookParameterData(_idParamEyeBallX, 1.0f));
         lookParameters.PushBack(CubismLook::LookParameterData(_idParamEyeBallY, 0.0f, 1.0f));
 

@@ -115,8 +115,8 @@ private:
     const Csm::CubismId* _idParamAngleX; ///< パラメータID: ParamAngleX
     const Csm::CubismId* _idParamAngleY; ///< パラメータID: ParamAngleX
     const Csm::CubismId* _idParamAngleZ; ///< パラメータID: ParamAngleX
-    const Csm::CubismId* _idParamBodyAngleX; ///< パラメータID: ParamBodyAngleX
-    const Csm::CubismId* _idParamEyeBallX; ///< パラメータID: ParamEyeBallX
+    const Csm::CubismId* _idParamBodyAngleX; ///< パラメータID: ParamBodyAngleX    const Csm::CubismId* _idParamBodyAngleY;
+    const Csm::CubismId* _idParamBodyAngleZ;    const Csm::CubismId* _idParamEyeBallX; ///< パラメータID: ParamEyeBallX
     const Csm::CubismId* _idParamEyeBallY; ///< パラメータID: ParamEyeBallXY
     Csm::csmBool _motionUpdated; ///< モーション更新フラグ
 };

@@ -6,6 +6,9 @@
  */
 
 #include "LAppModel.hpp"
+#include <dirent.h>
+#include <cstring>
+#include <stdlib.h>
 #include <fstream>
 #include <vector>
 #include <CubismModelSettingJson.hpp>
@@ -37,6 +40,7 @@ LAppModel::LAppModel()
     , _modelSetting(NULL)
     , _userTimeSeconds(0.0f)
     , _motionUpdated(false)
+    , _skinIndex(0)
 {
     if (DebugLogEnable)
     {
@@ -47,6 +51,8 @@ LAppModel::LAppModel()
     _idParamAngleY = CubismFramework::GetIdManager()->GetId(ParamAngleY);
     _idParamAngleZ = CubismFramework::GetIdManager()->GetId(ParamAngleZ);
     _idParamBodyAngleX = CubismFramework::GetIdManager()->GetId(ParamBodyAngleX);
+    _idParamBodyAngleY = CubismFramework::GetIdManager()->GetId(ParamBodyAngleY);
+    _idParamBodyAngleZ = CubismFramework::GetIdManager()->GetId(ParamBodyAngleZ);
     _idParamEyeBallX = CubismFramework::GetIdManager()->GetId(ParamEyeBallX);
     _idParamEyeBallY = CubismFramework::GetIdManager()->GetId(ParamEyeBallY);
 }
@@ -123,33 +129,67 @@ void LAppModel::SetupModel(ICubismModelSetting* setting)
     }
 
     //Expression
-    if (_modelSetting->GetExpressionCount() > 0)
     {
-        const csmInt32 count = _modelSetting->GetExpressionCount();
-        for (csmInt32 i = 0; i < count; i++)
+        csmBool hasExpression = false;
+        
+        // 1. Load from model3.json
+        if (_modelSetting->GetExpressionCount() > 0)
         {
-            csmString name = _modelSetting->GetExpressionName(i);
-            csmString path = _modelSetting->GetExpressionFileName(i);
-            path = _modelHomeDir + path;
-
-            buffer = CreateBuffer(path.GetRawString(), &size);
-            ACubismMotion* motion = LoadExpression(buffer, size, name.GetRawString());
-
-            if (motion)
+            const csmInt32 count = _modelSetting->GetExpressionCount();
+            for (csmInt32 i = 0; i < count; i++)
             {
-                if (_expressions[name] != NULL)
-                {
-                    ACubismMotion::Delete(_expressions[name]);
-                    _expressions[name] = NULL;
-                }
-                _expressions[name] = motion;
-            }
+                csmString name = _modelSetting->GetExpressionName(i);
+                csmString path = _modelSetting->GetExpressionFileName(i);
+                path = _modelHomeDir + path;
 
-            DeleteBuffer(buffer, path.GetRawString());
+                buffer = CreateBuffer(path.GetRawString(), &size);
+                ACubismMotion* motion = LoadExpression(buffer, size, name.GetRawString());
+
+                if (motion)
+                {
+                    if (_expressions[name] != NULL)
+                    {
+                        ACubismMotion::Delete(_expressions[name]);
+                        _expressions[name] = NULL;
+                    }
+                    _expressions[name] = motion;
+                    hasExpression = true;
+                }
+                DeleteBuffer(buffer, path.GetRawString());
+            }
+        }
+        
+        // 2. Auto-discover standalone .exp3.json files in the model folder
+        DIR* pDir = opendir(_modelHomeDir.GetRawString());
+        if (pDir != NULL) {
+            struct dirent* ent;
+            while ((ent = readdir(pDir)) != NULL) {
+                csmString fileName = ent->d_name;
+                if (strstr(fileName.GetRawString(), ".exp3.json")) {
+                    csmString name = fileName;
+                    if (_expressions[name] == NULL) { // Not already loaded
+                        csmString fullPath = _modelHomeDir + fileName;
+                        buffer = CreateBuffer(fullPath.GetRawString(), &size);
+                        if (buffer) {
+                            ACubismMotion* motion = LoadExpression(buffer, size, name.GetRawString());
+                            if (motion) {
+                                _expressions[name] = motion;
+                                hasExpression = true;
+                                LAppPal::PrintLogLn("[APP] Auto-loaded standalone expression: %s", name.GetRawString());
+                            }
+                            DeleteBuffer(buffer, fullPath.GetRawString());
+                        }
+                    }
+                }
+            }
+            closedir(pDir);
         }
 
-        CubismExpressionUpdater* expression = CSM_NEW CubismExpressionUpdater(*_expressionManager);
-        _updateScheduler.AddUpdatableList(expression);
+        if (hasExpression)
+        {
+            CubismExpressionUpdater* expression = CSM_NEW CubismExpressionUpdater(*_expressionManager);
+            _updateScheduler.AddUpdatableList(expression);
+        }
     }
 
     //Physics
@@ -256,6 +296,8 @@ void LAppModel::SetupModel(ICubismModelSetting* setting)
         lookParameters.PushBack(CubismLook::LookParameterData(_idParamAngleY, 0.0f, 30.0f));
         lookParameters.PushBack(CubismLook::LookParameterData(_idParamAngleZ, 0.0f, 0.0f, -30.0f));
         lookParameters.PushBack(CubismLook::LookParameterData(_idParamBodyAngleX, 10.0f));
+        lookParameters.PushBack(CubismLook::LookParameterData(_idParamBodyAngleY, 0.0f, 10.0f));
+        lookParameters.PushBack(CubismLook::LookParameterData(_idParamBodyAngleZ, 0.0f, 0.0f, -10.0f));
         lookParameters.PushBack(CubismLook::LookParameterData(_idParamEyeBallX, 1.0f));
         lookParameters.PushBack(CubismLook::LookParameterData(_idParamEyeBallY, 0.0f, 1.0f));
 
@@ -284,6 +326,31 @@ void LAppModel::SetupModel(ICubismModelSetting* setting)
     {
         const csmChar* group = _modelSetting->GetMotionGroupName(i);
         PreloadMotionGroup(group);
+    }
+
+    // Auto-discover extra .motion3.json
+    DIR* pDirM = opendir(_modelHomeDir.GetRawString());
+    if (pDirM != NULL) {
+        struct dirent* entM;
+        while ((entM = readdir(pDirM)) != NULL) {
+            csmString fileName = entM->d_name;
+            if (strstr(fileName.GetRawString(), ".motion3.json") && !strstr(fileName.GetRawString(), "loop") && !strstr(fileName.GetRawString(), "idle")) {
+                // very rough check: try not to double load if already in some group, but hard to know.
+                // let's just load it.
+                csmString fullPath = _modelHomeDir + fileName;
+                csmSizeInt sizeM;
+                csmByte* buffM = CreateBuffer(fullPath.GetRawString(), &sizeM);
+                if (buffM) {
+                    ACubismMotion* motion = LoadMotion(buffM, sizeM, fileName.GetRawString());
+                    if (motion) {
+                        _autoMotions.PushBack(motion);
+                        LAppPal::PrintLogLn("[APP] Auto-loaded standalone motion: %s", fileName.GetRawString());
+                    }
+                    DeleteBuffer(buffM, fullPath.GetRawString());
+                }
+            }
+        }
+        closedir(pDirM);
     }
 
     _motionManager->StopAllMotions();
@@ -355,6 +422,8 @@ void LAppModel::ReleaseMotions()
     }
 
     _motions.Clear();
+    for (csmUint32 i=0; i<_autoMotions.GetSize(); ++i) { ACubismMotion::Delete(_autoMotions[i]); }
+    _autoMotions.Clear();
 }
 
 /**
@@ -469,6 +538,14 @@ CubismMotionQueueEntryHandle LAppModel::StartRandomMotion(const csmChar* group, 
 {
     if (_modelSetting->GetMotionCount(group) == 0)
     {
+        if (_autoMotions.GetSize() > 0)
+        {
+            csmInt32 no = rand() % _autoMotions.GetSize();
+            ACubismMotion* motion = _autoMotions[no];
+            motion->SetFinishedMotionHandler(onFinishedMotionHandler);
+            motion->SetBeganMotionHandler(onBeganMotionHandler);
+            return _motionManager->StartMotionPriority(motion, false, priority);
+        }
         return InvalidMotionQueueEntryHandleValue;
     }
 
@@ -517,6 +594,17 @@ csmBool LAppModel::HitTest(const csmChar* hitAreaName, csmFloat32 x, csmFloat32 
             return IsHit(drawID, x, y);
         }
     }
+    
+    if (count == 0) {
+        // Fallback for models without configured HitAreas (like 薇薇安)
+        // Check generic top/bottom zones
+        if (strcmp(hitAreaName, HitAreaNameHead) == 0) {
+            return y > 0.0f; // upper half of logical space
+        } else if (strcmp(hitAreaName, HitAreaNameBody) == 0) {
+            return y <= 0.0f; // lower half
+        }
+    }
+    
     return false; // 存在しない場合はfalse
 }
 
@@ -569,6 +657,18 @@ void LAppModel::ReloadRenderer()
     SetupTextures();
 }
 
+void LAppModel::SwitchSkin()
+{
+    _skinIndex++;
+    if (_skinIndex > 3)
+    {
+        _skinIndex = 0;
+    }
+    
+    // Re-setup textures
+    SetupTextures();
+}
+
 void LAppModel::SetupTextures()
 {
     for (csmInt32 modelTextureNumber = 0; modelTextureNumber < _modelSetting->GetTextureCount(); modelTextureNumber++)
@@ -581,6 +681,30 @@ void LAppModel::SetupTextures()
 
         //OpenGLのテクスチャユニットにテクスチャをロードする
         csmString texturePath = _modelSetting->GetTextureFileName(modelTextureNumber);
+        
+        if (_skinIndex > 0)
+        {
+            // Specifically handling "role1" format: texture_XX.png
+            char buff[64];
+            sprintf(buff, "texture_%02d.png", modelTextureNumber + _skinIndex * 4);
+            csmString altPath = csmString("textures/") + buff;
+
+            // Check if alt texture exists
+            csmString fullPath = _modelHomeDir + altPath;
+            FILE* fp = fopen(fullPath.GetRawString(), "rb");
+            if (fp)
+            {
+                fclose(fp);
+                texturePath = altPath;
+            }
+            else if (_skinIndex > 0 && modelTextureNumber == 0)
+            {
+                // If the first texture in a skin set is missing, loop back to default to avoid blank skins.
+                LAppPal::PrintLogLn("[Skin] Skin index %d texture %s not found, resetting to default.", _skinIndex, altPath.GetRawString());
+                _skinIndex = 0;
+                texturePath = _modelSetting->GetTextureFileName(modelTextureNumber); // Reset to default
+            }
+        }
         texturePath = _modelHomeDir + texturePath;
 
         LAppTextureManager::TextureInfo* texture = LAppDelegate::GetInstance()->GetTextureManager()->CreateTextureFromPngFile(texturePath.GetRawString());
