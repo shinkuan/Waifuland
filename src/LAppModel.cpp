@@ -519,14 +519,6 @@ void LAppModel::Update()
     //-----------------------------------------------------------------
     _model->LoadParameters(); // 前回セーブされた状態をロード
 
-    // Reset all skin params to defaults before motion update,
-    // so params from a previous skin motion don't persist when
-    // the current motion doesn't animate them.
-    for (csmInt32 i = 0; i < _allSkinParamIds.GetSize(); i++)
-    {
-        _model->SetParameterValue(_allSkinParamIds[i], _allSkinParamDefaults[i]);
-    }
-
     if (_motionManager->IsFinished())
     {
         // モーションの再生がない場合、待機モーションの中からランダムで再生する
