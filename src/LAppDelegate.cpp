@@ -35,6 +35,12 @@ static void HandleToggleSignal(int) {
     }
 }
 
+static void HandleFocusSignal(int) {
+    if (s_instance) {
+        s_instance->RequestMoveToFocusedMonitor();
+    }
+}
+
 LAppDelegate* LAppDelegate::GetInstance()
 {
     if (s_instance == NULL)
@@ -63,6 +69,7 @@ bool LAppDelegate::Initialize()
     }
 
     signal(SIGUSR1, HandleToggleSignal);
+    signal(SIGUSR2, HandleFocusSignal);
 
     DetectCompositor();
 
@@ -136,7 +143,11 @@ void LAppDelegate::Run()
 
         glViewport(0, 0, _windowWidth, _windowHeight);
 
-        
+        if (_pendingFocusMove) {
+            _pendingFocusMove = false;
+            MoveToFocusedMonitor();
+        }
+
         int hx, hy;
         if (GetGlobalCursorPosition(hx, hy) && !_wlContext.outputs.empty()) {
             int current_idx = _wlContext.current_output_index;

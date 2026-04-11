@@ -167,6 +167,9 @@ public:
     bool _isHidden = false;
     void ToggleHidden() { _isHidden = !_isHidden; }
 
+    volatile bool _pendingFocusMove = false;
+    void RequestMoveToFocusedMonitor() { _pendingFocusMove = true; }
+
     float _modelScale;
     float _modelX;
     float _modelY;
