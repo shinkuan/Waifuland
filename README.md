@@ -69,7 +69,7 @@ sudo dnf install gcc-c++ cmake pkgconf-pkg-config wayland-devel wayland-protocol
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/your-username/waifuland.git
+git clone https://github.com/shinkuan/waifuland.git
 cd waifuland
 ```
 
