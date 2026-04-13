@@ -34,6 +34,7 @@ https://github.com/user-attachments/assets/95dfdedc-4957-4bb7-b79f-f3addd97a6db
 - **Interactive** — responds to mouse drag, tap, and scroll input
 - **Motion & expression** — supports idle animations, lip-sync, eye-blink, physics, and expressions
 - **Configurable model directory** — load models from any path via CLI flag or XDG config
+- **JSON configuration** — customize behavior via `config.json` (default model, emotion timeout, additional model dirs, scale/position, window size)
 
 ## Prerequisites
 
@@ -117,7 +118,45 @@ The binary will be at `build/bin/waifuland`.
 
 # Run with a custom model directory
 ./build/bin/waifuland --models_dir /path/to/your/models
+
+# Run with a custom config file
+./build/bin/waifuland --config /path/to/config.json
 ```
+
+### Configuration
+
+Waifuland reads a JSON config file from `$XDG_CONFIG_HOME/waifuland/config.json` (fallback: `~/.config/waifuland/config.json`). Override the path with `--config <path>`.
+
+Example `config.json`:
+
+```json
+{
+    "additional_model_dirs": [
+        "/home/user/extra-models",
+        "/opt/shared-models"
+    ],
+    "default_model": "MyFavoriteModel",
+    "emotion_timeout": 5,
+    "model_scale": 1.0,
+    "model_x": 0.0,
+    "model_y": 0.0,
+    "window_width": 1900,
+    "window_height": 1000
+}
+```
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `additional_model_dirs` | string[] | `[]` | Extra directories to scan for models (in addition to the default models dir) |
+| `default_model` | string | `""` | Name of the model subfolder to load first on startup |
+| `emotion_timeout` | float | `5` | Seconds before expression reverts to default. Set to `-1` to never revert |
+| `model_scale` | float | `1.0` | Initial model scale |
+| `model_x` | float | `0.0` | Initial model X offset |
+| `model_y` | float | `0.0` | Initial model Y offset |
+| `window_width` | int | `1900` | Render target width in pixels |
+| `window_height` | int | `1000` | Render target height in pixels |
+
+All fields are optional. Missing fields use their default values. If the config file doesn't exist, all defaults are used.
 
 ### Controls
 
@@ -201,6 +240,7 @@ The default models directory is `$XDG_CONFIG_HOME/waifuland/models/` (fallback: 
 waifuland/
 ├── src/                    # Application source code
 │   ├── main.cpp            # Entry point, CLI argument parsing
+│   ├── LAppConfig.*        # JSON config file reader (singleton)
 │   ├── LAppWayland.*       # Wayland client setup (display, compositor, EGL, layer-shell)
 │   ├── LAppWaylandRegion.* # Input region management (click-through transparency)
 │   ├── LAppDelegate.*      # Main app controller, render loop, input handling

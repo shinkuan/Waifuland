@@ -20,6 +20,7 @@
 #include <Id/CubismIdManager.hpp>
 #include <Motion/CubismMotionQueueEntry.hpp>
 #include "LAppDefine.hpp"
+#include "LAppConfig.hpp"
 #include "LAppPal.hpp"
 #include "LAppTextureManager.hpp"
 #include "LAppDelegate.hpp"
@@ -45,6 +46,7 @@ LAppModel::LAppModel()
     , _motionUpdated(false)
     , _currentSkinIndex(0)
     , _lastExpressionTime(-1.0f)
+    , _nextExpressionIndex(0)
 {
     if (DebugLogEnable)
     {
@@ -163,30 +165,34 @@ void LAppModel::SetupModel(ICubismModelSetting* setting)
             }
         }
         
-        // 2. Auto-discover standalone .exp3.json files in the model folder
-        DIR* pDir = opendir(_modelHomeDir.GetRawString());
-        if (pDir != NULL) {
-            struct dirent* ent;
-            while ((ent = readdir(pDir)) != NULL) {
-                csmString fileName = ent->d_name;
-                if (strstr(fileName.GetRawString(), ".exp3.json")) {
-                    csmString name = fileName;
-                    if (_expressions[name] == NULL) { // Not already loaded
-                        csmString fullPath = _modelHomeDir + fileName;
-                        buffer = CreateBuffer(fullPath.GetRawString(), &size);
-                        if (buffer) {
-                            ACubismMotion* motion = LoadExpression(buffer, size, name.GetRawString());
-                            if (motion) {
-                                _expressions[name] = motion;
-                                hasExpression = true;
-                                LAppPal::PrintLogLn("[APP] Auto-loaded standalone expression: %s", name.GetRawString());
+        // 2. Auto-discover standalone .exp3.json files in the model folder and Expressions/ subfolder
+        const csmChar* exprSearchDirs[] = { "", "Expressions/" };
+        for (int d = 0; d < 2; d++) {
+            csmString searchDir = _modelHomeDir + exprSearchDirs[d];
+            DIR* pDir = opendir(searchDir.GetRawString());
+            if (pDir != NULL) {
+                struct dirent* ent;
+                while ((ent = readdir(pDir)) != NULL) {
+                    csmString fileName = ent->d_name;
+                    if (strstr(fileName.GetRawString(), ".exp3.json")) {
+                        csmString name = fileName;
+                        if (_expressions[name] == NULL) { // Not already loaded
+                            csmString fullPath = searchDir + fileName;
+                            buffer = CreateBuffer(fullPath.GetRawString(), &size);
+                            if (buffer) {
+                                ACubismMotion* motion = LoadExpression(buffer, size, name.GetRawString());
+                                if (motion) {
+                                    _expressions[name] = motion;
+                                    hasExpression = true;
+                                    LAppPal::PrintLogLn("[APP] Auto-loaded standalone expression: %s", name.GetRawString());
+                                }
+                                DeleteBuffer(buffer, fullPath.GetRawString());
                             }
-                            DeleteBuffer(buffer, fullPath.GetRawString());
                         }
                     }
                 }
+                closedir(pDir);
             }
-            closedir(pDir);
         }
 
         if (hasExpression)
@@ -536,13 +542,17 @@ void LAppModel::Update()
 
     _updateScheduler.OnLateUpdate(_model, deltaTimeSeconds);
 
-    // Expression timeout: revert to default after ExpressionTimeoutSeconds
-    if (_lastExpressionTime >= 0.0f &&
-        (_userTimeSeconds - _lastExpressionTime) > ExpressionTimeoutSeconds)
+    // Expression timeout: revert to default after emotion_timeout seconds
+    // emotion_timeout < 0 means expressions never revert
     {
-        _expressionManager->StopAllMotions();
-        _lastExpressionTime = -1.0f;
-        if (_debugMode) LAppPal::PrintLogLn("[APP] Expression timed out, reverted to default");
+        float timeout = LAppConfig::GetInstance().emotionTimeout;
+        if (timeout >= 0.0f && _lastExpressionTime >= 0.0f &&
+            (_userTimeSeconds - _lastExpressionTime) > timeout)
+        {
+            _expressionManager->StopAllMotions();
+            _lastExpressionTime = -1.0f;
+            if (_debugMode) LAppPal::PrintLogLn("[APP] Expression timed out, reverted to default");
+        }
     }
 
     _model->Update();
@@ -711,7 +721,8 @@ void LAppModel::SetRandomExpression()
         return;
     }
 
-    csmInt32 no = rand() % _expressions.GetSize();
+    csmInt32 no = _nextExpressionIndex % _expressions.GetSize();
+    _nextExpressionIndex = (no + 1) % _expressions.GetSize();
     csmMap<csmString, ACubismMotion*>::const_iterator map_ite;
     csmInt32 i = 0;
     for (map_ite = _expressions.Begin(); map_ite != _expressions.End(); map_ite++)
@@ -739,7 +750,12 @@ void LAppModel::SwitchSkin()
 {
     csmInt32 groupCount = _modelSetting->GetMotionGroupCount();
     if (groupCount == 0) {
-        LAppPal::PrintLogLn("[APP] No motion groups available for skin switching");
+        if (_expressions.GetSize() > 0) {
+            LAppPal::PrintLogLn("[APP] No motion groups, cycling expression instead");
+            SetRandomExpression();
+        } else {
+            LAppPal::PrintLogLn("[APP] No motion groups or expressions available for skin switching");
+        }
         return;
     }
 
