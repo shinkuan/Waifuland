@@ -137,6 +137,11 @@ private:
     virtual ~LAppLive2DManager();
 
     /**
+    * @brief   指定ディレクトリからモデルをスキャンする
+    */
+    void ScanModelsInDir(const Csm::csmString& basePath);
+
+    /**
     * @brief   モデルキャッシュを初期化する
     */
     void InitModelCache();
@@ -157,4 +162,6 @@ private:
     Csm::csmInt32 _sceneIndex; ///< 表示するシーンのインデックス値
 
     Csm::csmVector<Csm::csmString> _modelDir; ///< モデルディレクトリ名のコンテナ
+    Csm::csmVector<Csm::csmString> _modelBasePath; ///< 各モデルの親ディレクトリパス
+    Csm::csmVector<Csm::csmString> _modelJsonName; ///< 各モデルの.model3.jsonファイル名
 };

@@ -200,6 +200,7 @@ private:
 
     Csm::csmFloat32 _lastExpressionTime; ///< Time when the last expression was set
     static const Csm::csmFloat32 ExpressionTimeoutSeconds; ///< Seconds before expression reverts to default
+    Csm::csmInt32 _nextExpressionIndex; ///< Round-robin index for cycling expressions
 
     /// All parameter IDs found across skin motion groups, used to reset before switching
     Csm::csmVector<const Csm::CubismId*> _allSkinParamIds;

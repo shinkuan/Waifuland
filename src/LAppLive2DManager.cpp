@@ -13,12 +13,14 @@
 #include <unistd.h>
 #include <libgen.h>
 #include <limits.h>
+#include <string>
 #include <GL/glew.h>
 
 #include <Rendering/CubismRenderer.hpp>
 #include <Rendering/OpenGL/CubismOffscreenManager_OpenGLES2.hpp>
 #include "LAppPal.hpp"
 #include "LAppDefine.hpp"
+#include "LAppConfig.hpp"
 #include "LAppDelegate.hpp"
 #include "LAppModel.hpp"
 #include "LAppView.hpp"
@@ -84,6 +86,21 @@ LAppLive2DManager::LAppLive2DManager()
         return;
     }
 
+    // Find default model index from config
+    const std::string& defaultModel = LAppConfig::GetInstance().defaultModel;
+    if (!defaultModel.empty())
+    {
+        for (csmInt32 i = 0; i < _modelDir.GetSize(); i++)
+        {
+            if (strcmp(_modelDir[i].GetRawString(), defaultModel.c_str()) == 0)
+            {
+                _sceneIndex = i;
+                LAppPal::PrintLogLn("[APP]Default model set to: %s (index %d)", defaultModel.c_str(), i);
+                break;
+            }
+        }
+    }
+
     InitModelCache();
 
     ChangeScene(_sceneIndex);
@@ -111,47 +128,101 @@ void LAppLive2DManager::ReleaseAllModel()
     _modelCache.Clear();
 }
 
-void LAppLive2DManager::SetUpModel()
+void LAppLive2DManager::ScanModelsInDir(const csmString& basePath)
 {
-    // ResourcesPathの中にあるフォルダ名を全てクロールし、モデルが存在するフォルダを定義する。
-    // フォルダはあるが同名の.model3.jsonが見つからなかった場合はリストに含めない。
-    struct dirent *dirent;
-    csmString crawlPath(LAppDefine::ModelsDir.c_str());
-
-    DIR *pDir = opendir(crawlPath.GetRawString());
-    if (pDir == NULL) return;
-
-    _modelDir.Clear();
-
-    while ((dirent = readdir(pDir)) != NULL)
+    struct dirent *entry;
+    DIR *pDir = opendir(basePath.GetRawString());
+    if (pDir == NULL)
     {
-        if ((dirent->d_type & DT_DIR) && strcmp(dirent->d_name, "..") != 0)
+        LAppPal::PrintLogLn("[APP]Cannot open model directory: %s", basePath.GetRawString());
+        return;
+    }
+
+    while ((entry = readdir(pDir)) != NULL)
+    {
+        if ((entry->d_type & DT_DIR) && strcmp(entry->d_name, "..") != 0 && strcmp(entry->d_name, ".") != 0)
         {
-            // フォルダと同名の.model3.jsonがあるか探索する
-            struct dirent *dirent2;
+            struct dirent *entry2;
+            csmString modelName(entry->d_name);
 
-            csmString modelName(dirent->d_name);
-
-            csmString modelPath(crawlPath);
+            csmString modelPath(basePath);
             modelPath += modelName;
             modelPath.Append(1, '/');
 
-            csmString model3jsonName(modelName);
-            model3jsonName += ".model3.json";
-
             DIR *pDir2 = opendir(modelPath.GetRawString());
-            while ((dirent2 = readdir(pDir2)) != NULL)
+            if (pDir2 == NULL) continue;
+
+            while ((entry2 = readdir(pDir2)) != NULL)
             {
-                if (strcmp(dirent2->d_name, model3jsonName.GetRawString()) == 0)
+                const char* name = entry2->d_name;
+                size_t len = strlen(name);
+                const char* suffix = ".model3.json";
+                size_t suffixLen = strlen(suffix);
+                if (len > suffixLen && strcmp(name + len - suffixLen, suffix) == 0)
                 {
-                    _modelDir.PushBack(csmString(dirent->d_name));
+                    _modelDir.PushBack(csmString(entry->d_name));
+                    _modelBasePath.PushBack(basePath);
+                    _modelJsonName.PushBack(csmString(name));
+                    break;
                 }
             }
             closedir(pDir2);
         }
     }
     closedir(pDir);
-    qsort(_modelDir.GetPtr(), _modelDir.GetSize(), sizeof(csmString), CompareCsmString);
+}
+
+void LAppLive2DManager::SetUpModel()
+{
+    _modelDir.Clear();
+    _modelBasePath.Clear();
+    _modelJsonName.Clear();
+
+    // Scan default models directory
+    csmString defaultPath(LAppDefine::ModelsDir.c_str());
+    ScanModelsInDir(defaultPath);
+
+    // Scan additional model directories from config
+    const LAppConfig& config = LAppConfig::GetInstance();
+    for (size_t i = 0; i < config.additionalModelDirs.size(); i++)
+    {
+        std::string dir = config.additionalModelDirs[i];
+        if (!dir.empty() && dir.back() != '/') dir += "/";
+
+        // Resolve absolute path
+        char resolved[PATH_MAX];
+        if (realpath(dir.c_str(), resolved) != NULL)
+        {
+            dir = std::string(resolved) + "/";
+        }
+
+        csmString additionalPath(dir.c_str());
+        LAppPal::PrintLogLn("[APP]Scanning additional model dir: %s", additionalPath.GetRawString());
+        ScanModelsInDir(additionalPath);
+    }
+
+    // Sort model list (and keep base paths in sync) - simple bubble sort
+    for (csmInt32 i = 0; i < (csmInt32)_modelDir.GetSize() - 1; i++)
+    {
+        for (csmInt32 j = 0; j < (csmInt32)_modelDir.GetSize() - 1 - i; j++)
+        {
+            if (strcmp(_modelDir[j].GetRawString(), _modelDir[j + 1].GetRawString()) > 0)
+            {
+                // Swap modelDir
+                csmString tmpDir = _modelDir[j];
+                _modelDir[j] = _modelDir[j + 1];
+                _modelDir[j + 1] = tmpDir;
+                // Swap basePath
+                csmString tmpBase = _modelBasePath[j];
+                _modelBasePath[j] = _modelBasePath[j + 1];
+                _modelBasePath[j + 1] = tmpBase;
+                // Swap jsonName
+                csmString tmpJson = _modelJsonName[j];
+                _modelJsonName[j] = _modelJsonName[j + 1];
+                _modelJsonName[j + 1] = tmpJson;
+            }
+        }
+    }
 }
 
 void LAppLive2DManager::InitModelCache()
@@ -182,12 +253,11 @@ void LAppLive2DManager::PreloadNextModel()
     const csmString& model = _modelDir[nextIndex];
     LAppPal::PrintLogLn("[APP]preloading model: %s", model.GetRawString());
 
-    csmString modelPath(LAppDefine::ModelsDir.c_str());
+    csmString modelPath(_modelBasePath[nextIndex]);
     modelPath += model;
     modelPath.Append(1, '/');
 
-    csmString modelJsonName(model);
-    modelJsonName += ".model3.json";
+    const csmString& modelJsonName = _modelJsonName[nextIndex];
 
     _modelCache[nextIndex] = new LAppModel();
     _modelCache[nextIndex]->LoadAssets(modelPath.GetRawString(), modelJsonName.GetRawString());
@@ -274,6 +344,7 @@ void LAppLive2DManager::OnTap(csmFloat32 x, csmFloat32 y)
                 LAppPal::PrintLogLn("[APP]hit area: [%s]", HitAreaNameBody);
             }
             _models[i]->StartRandomMotion(MotionGroupTapBody, PriorityNormal, FinishedMotion, BeganMotion);
+            _models[i]->SetRandomExpression();
         }
     }
 }
@@ -363,12 +434,11 @@ void LAppLive2DManager::ChangeScene(Csm::csmInt32 index)
         const csmString& model = _modelDir[index];
         LAppPal::PrintLogLn("[APP]loading model: %s", model.GetRawString());
 
-        csmString modelPath(LAppDefine::ModelsDir.c_str());
+        csmString modelPath(_modelBasePath[index]);
         modelPath += model;
         modelPath.Append(1, '/');
 
-        csmString modelJsonName(model);
-        modelJsonName += ".model3.json";
+        const csmString& modelJsonName = _modelJsonName[index];
 
         _modelCache[index] = new LAppModel();
         _modelCache[index]->LoadAssets(modelPath.GetRawString(), modelJsonName.GetRawString());
