@@ -22,6 +22,7 @@
 #include "LAppDefine.hpp"
 #include "LAppConfig.hpp"
 #include "LAppPal.hpp"
+#include "LAppIPC.hpp"
 #include "LAppTextureManager.hpp"
 #include "LAppDelegate.hpp"
 #include <Motion/CubismMotionJson.hpp>
@@ -542,6 +543,22 @@ void LAppModel::Update()
 
     _updateScheduler.OnLateUpdate(_model, deltaTimeSeconds);
 
+    // External mouth Y override (IPC lipsync)
+    if (LAppIPC::HasExternalMouthY())
+    {
+        csmFloat32 mouthValue = LAppIPC::GetExternalMouthY();
+        for (csmUint32 i = 0; i < _lipSyncIds.GetSize(); ++i)
+        {
+            _model->SetParameterValue(_lipSyncIds[i], mouthValue);
+        }
+    }
+
+    // External look-at override (IPC head tracking)
+    if (LAppIPC::HasExternalLook())
+    {
+        _dragManager->Set(LAppIPC::GetExternalLookX(), LAppIPC::GetExternalLookY());
+    }
+
     // Expression timeout: revert to default after emotion_timeout seconds
     // emotion_timeout < 0 means expressions never revert
     {
@@ -798,4 +815,36 @@ void LAppModel::MotionEventFired(const csmString& eventValue)
 Csm::Rendering::CubismRenderTarget_OpenGLES2& LAppModel::GetRenderBuffer()
 {
     return _renderBuffer;
+}
+
+std::vector<std::string> LAppModel::GetExpressionIds() const
+{
+    std::vector<std::string> result;
+    for (csmMap<csmString, ACubismMotion*>::const_iterator iter = _expressions.Begin();
+         iter != _expressions.End(); ++iter)
+    {
+        result.push_back(std::string(iter->First.GetRawString()));
+    }
+    return result;
+}
+
+std::vector<LAppModel::MotionInfo> LAppModel::GetMotionList() const
+{
+    std::vector<MotionInfo> result;
+    if (!_modelSetting) return result;
+
+    for (csmInt32 g = 0; g < _modelSetting->GetMotionGroupCount(); g++)
+    {
+        const csmChar* group = _modelSetting->GetMotionGroupName(g);
+        csmInt32 count = _modelSetting->GetMotionCount(group);
+        for (csmInt32 i = 0; i < count; i++)
+        {
+            MotionInfo info;
+            info.group = group;
+            info.index = i;
+            info.file = _modelSetting->GetMotionFileName(group, i);
+            result.push_back(info);
+        }
+    }
+    return result;
 }

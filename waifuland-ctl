@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+#
+# waifuland-ctl - CLI client for controlling Waifuland via IPC socket.
+#
+# Usage:
+#   waifuland-ctl <command> [args...]
+#
+# Examples:
+#   waifuland-ctl get_status
+#   waifuland-ctl get_available_models
+#   waifuland-ctl set_model --name "MyModel"
+#   waifuland-ctl set_model --index 2
+#   waifuland-ctl get_expressions
+#   waifuland-ctl set_expression --id "happy.exp3.json"
+#   waifuland-ctl get_motions
+#   waifuland-ctl do_motion --group "TapBody" --index 0
+#   waifuland-ctl set_mouth_y --value 0.8
+#   waifuland-ctl set_model_zoom --value 1.5
+#   waifuland-ctl set_model_position --x 0.5 --y -0.3
+#   waifuland-ctl get_model_position
+#   waifuland-ctl toggle_hidden
+#   waifuland-ctl next_model
+#   waifuland-ctl prev_model
+#   waifuland-ctl switch_skin
+#   waifuland-ctl set_look --x 0.5 --y 0.3
+#   waifuland-ctl set_look --reset
+#   waifuland-ctl get_current_model
+#
+# The socket path is $XDG_RUNTIME_DIR/waifuland.sock (fallback: /tmp/waifuland.sock)
+
+set -euo pipefail
+
+SOCK="${XDG_RUNTIME_DIR:-/tmp}/waifuland.sock"
+
+if [ $# -lt 1 ]; then
+    echo "Usage: waifuland-ctl <command> [--key value ...]"
+    echo ""
+    echo "Commands:"
+    echo "  get_status            Get general status"
+    echo "  get_available_models  List all available models"
+    echo "  get_current_model     Get current model name and index"
+    echo "  set_model             Set model (--name or --index)"
+    echo "  next_model            Switch to next model"
+    echo "  prev_model            Switch to previous model"
+    echo "  get_expressions       List expressions for current model"
+    echo "  set_expression        Set expression (--id)"
+    echo "  get_motions           List motions for current model"
+    echo "  do_motion             Play motion (--group, --index, --priority)"
+    echo "  set_mouth_y           Set mouth Y for lipsync (--value 0.0-1.0)"
+    echo "  set_model_zoom        Set zoom level (--value 0.1-10.0)"
+    echo "  set_model_position    Set position (--x, --y)"
+    echo "  get_model_position    Get current position and zoom"
+    echo "  toggle_hidden         Toggle window visibility"
+    echo "  switch_skin           Switch model skin/outfit"
+    echo "  set_look              Set look direction (--x, --y) or --reset"
+    exit 1
+fi
+
+if [ ! -S "$SOCK" ]; then
+    echo "Error: Waifuland is not running (socket not found: $SOCK)" >&2
+    exit 1
+fi
+
+COMMAND="$1"
+shift
+
+# Build JSON from remaining args
+JSON="{\"command\":\"$COMMAND\""
+
+while [ $# -gt 0 ]; do
+    key="${1#--}"  # strip leading --
+    shift
+
+    if [ "$key" = "reset" ]; then
+        JSON="$JSON,\"reset\":true"
+        continue
+    fi
+
+    if [ $# -eq 0 ]; then
+        echo "Error: missing value for --$key" >&2
+        exit 1
+    fi
+    value="$1"
+    shift
+
+    # Check if value is numeric
+    if [[ "$value" =~ ^-?[0-9]*\.?[0-9]+$ ]]; then
+        JSON="$JSON,\"$key\":$value"
+    else
+        JSON="$JSON,\"$key\":\"$value\""
+    fi
+done
+
+JSON="$JSON}"
+
+# Check if socat is available
+if ! command -v socat &>/dev/null; then
+    echo "Error: socat is required but not installed." >&2
+    exit 1
+fi
+
+# Send command and read response
+RESPONSE=$(echo "$JSON" | socat - UNIX-CONNECT:"$SOCK" 2>/dev/null) || {
+    echo "Error: Failed to communicate with Waifuland (socket: $SOCK)." >&2
+    exit 1
+}
+
+# Pretty-print if python3+json available, otherwise raw
+if command -v python3 &>/dev/null; then
+    echo "$RESPONSE" | python3 -m json.tool 2>/dev/null || echo "$RESPONSE"
+else
+    echo "$RESPONSE"
+fi

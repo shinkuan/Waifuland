@@ -7,6 +7,8 @@
 
 #pragma once
 
+#include <string>
+#include <vector>
 #include <CubismFramework.hpp>
 #include <ICubismModelSetting.hpp>
 #include <Type/csmRectF.hpp>
@@ -120,6 +122,30 @@ public:
      * @brief   別ターゲットに描画する際に使用するバッファの取得
      */
     Csm::Rendering::CubismRenderTarget_OpenGLES2& GetRenderBuffer();
+
+    /**
+     * @brief   Get all expression IDs for IPC queries.
+     */
+    std::vector<std::string> GetExpressionIds() const;
+
+    /**
+     * @brief   Motion info for IPC queries.
+     */
+    struct MotionInfo {
+        std::string group;
+        int index;
+        std::string file;
+    };
+
+    /**
+     * @brief   Get all available motions for IPC queries.
+     */
+    std::vector<MotionInfo> GetMotionList() const;
+
+    /**
+     * @brief   Get the model setting (for IPC to query model capabilities).
+     */
+    Csm::ICubismModelSetting* GetModelSetting() const { return _modelSetting; }
 
 protected:
     /**

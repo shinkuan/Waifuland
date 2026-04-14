@@ -20,6 +20,7 @@ https://github.com/user-attachments/assets/95dfdedc-4957-4bb7-b79f-f3addd97a6db
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
 - [Usage](#usage)
+- [IPC API](#ipc-api)
 - [Model Setup](#model-setup)
 - [Architecture](#architecture)
 - [Built With](#built-with)
@@ -35,6 +36,7 @@ https://github.com/user-attachments/assets/95dfdedc-4957-4bb7-b79f-f3addd97a6db
 - **Motion & expression** — supports idle animations, lip-sync, eye-blink, physics, and expressions
 - **Configurable model directory** — load models from any path via CLI flag or XDG config
 - **JSON configuration** — customize behavior via `config.json` (default model, emotion timeout, additional model dirs, scale/position, window size)
+- **IPC control** — Unix domain socket API for external control (model switching, expressions, motions, lipsync, zoom, position, look-at direction)
 
 ## Prerequisites
 
@@ -217,6 +219,287 @@ bind = SUPER, W, exec, killall -s SIGUSR1 waifuland
 bind = SUPER SHIFT, W, exec, killall -s SIGUSR2 waifuland
 ```
 
+## IPC API
+
+Waifuland exposes a Unix domain socket for external control by scripts and programs.
+
+- **Socket path:** `$XDG_RUNTIME_DIR/waifuland.sock` (fallback: `/tmp/waifuland.sock`)
+- **Protocol:** Newline-delimited JSON — send `{"command":"<name>", ...}\n`, receive `{"ok":true, ...}\n`
+- **Requires:** `socat` (install via your package manager)
+
+### CLI Client
+
+A convenience CLI client `waifuland-ctl` is included in the project root:
+
+```bash
+./waifuland-ctl <command> [--key value ...]
+```
+
+### Available Commands
+
+#### `get_status` — Get general status
+
+Returns current model, zoom, position, and visibility.
+
+```bash
+./waifuland-ctl get_status
+```
+
+```json
+{
+    "ok": true,
+    "model": "MyModel",
+    "model_index": 0,
+    "model_count": 3,
+    "hidden": false,
+    "zoom": 1.0,
+    "x": 0.0,
+    "y": 0.0
+}
+```
+
+#### `get_available_models` — List all discovered models
+
+```bash
+./waifuland-ctl get_available_models
+```
+
+```json
+{
+    "ok": true,
+    "models": ["MyModel", "AnotherModel", "ThirdModel"]
+}
+```
+
+#### `get_current_model` — Get current model name and index
+
+```bash
+./waifuland-ctl get_current_model
+```
+
+```json
+{
+    "ok": true,
+    "model": "MyModel",
+    "index": 0
+}
+```
+
+#### `set_model` — Switch model by name or index
+
+```bash
+# By name
+./waifuland-ctl set_model --name "AnotherModel"
+
+# By index
+./waifuland-ctl set_model --index 2
+```
+
+```json
+{
+    "ok": true
+}
+```
+
+#### `next_model` — Switch to next model
+
+```bash
+./waifuland-ctl next_model
+```
+
+```json
+{
+    "ok": true
+}
+```
+
+#### `prev_model` — Switch to previous model
+
+```bash
+./waifuland-ctl prev_model
+```
+
+```json
+{
+    "ok": true
+}
+```
+
+#### `get_expressions` — List expressions for current model
+
+```bash
+./waifuland-ctl get_expressions
+```
+
+```json
+{
+    "ok": true,
+    "expressions": ["happy.exp3.json", "angry.exp3.json", "sad.exp3.json"]
+}
+```
+
+#### `set_expression` — Set expression by ID
+
+```bash
+./waifuland-ctl set_expression --id "happy.exp3.json"
+```
+
+```json
+{
+    "ok": true
+}
+```
+
+#### `get_motions` — List motions for current model
+
+```bash
+./waifuland-ctl get_motions
+```
+
+```json
+{
+    "ok": true,
+    "motions": [
+        {"group": "Idle", "index": 0, "file": "idle_01.motion3.json"},
+        {"group": "TapBody", "index": 0, "file": "tap_01.motion3.json"}
+    ]
+}
+```
+
+#### `do_motion` — Play a motion
+
+```bash
+# Play a specific motion by group and index
+./waifuland-ctl do_motion --group "TapBody" --index 0
+
+# Play with custom priority (default: 2 = Normal)
+./waifuland-ctl do_motion --group "Idle" --index 0 --priority 3
+
+# Play a random TapBody motion (omit group)
+./waifuland-ctl do_motion
+```
+
+```json
+{
+    "ok": true
+}
+```
+
+#### `set_mouth_y` — Set mouth opening for external lipsync
+
+Value range: `0.0` (closed) to `1.0` (fully open). Send continuously for real-time lipsync.
+
+```bash
+./waifuland-ctl set_mouth_y --value 0.8
+```
+
+```json
+{
+    "ok": true
+}
+```
+
+#### `set_model_zoom` — Set model zoom/scale
+
+Value range: `0.1` to `10.0`.
+
+```bash
+./waifuland-ctl set_model_zoom --value 1.5
+```
+
+```json
+{
+    "ok": true
+}
+```
+
+#### `set_model_position` — Set model position offset
+
+```bash
+./waifuland-ctl set_model_position --x 0.5 --y -0.3
+```
+
+```json
+{
+    "ok": true
+}
+```
+
+#### `get_model_position` — Get current position and zoom
+
+```bash
+./waifuland-ctl get_model_position
+```
+
+```json
+{
+    "ok": true,
+    "x": 0.5,
+    "y": -0.3,
+    "zoom": 1.5
+}
+```
+
+#### `toggle_hidden` — Toggle window visibility
+
+```bash
+./waifuland-ctl toggle_hidden
+```
+
+```json
+{
+    "ok": true,
+    "hidden": true
+}
+```
+
+#### `switch_skin` — Switch model skin/outfit
+
+```bash
+./waifuland-ctl switch_skin
+```
+
+```json
+{
+    "ok": true
+}
+```
+
+#### `set_look` — Override look-at direction (for head/face tracking)
+
+```bash
+# Set look direction (x, y range: -1.0 to 1.0)
+./waifuland-ctl set_look --x 0.5 --y 0.3
+
+# Reset to default (follow cursor)
+./waifuland-ctl set_look --reset
+```
+
+```json
+{
+    "ok": true
+}
+```
+
+### Raw Socket Usage
+
+You can also communicate directly with the socket without `waifuland-ctl`:
+
+```bash
+# Using socat
+echo '{"command":"get_status"}' | socat - UNIX-CONNECT:$XDG_RUNTIME_DIR/waifuland.sock
+
+# Using Python
+python3 -c "
+import socket, json
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+sock.connect('$XDG_RUNTIME_DIR/waifuland.sock')
+sock.send(b'{\"command\":\"get_status\"}\n')
+print(sock.recv(4096).decode())
+sock.close()
+"
+```
+
 ## Model Setup
 
 Place Live2D models in your models directory. Each model should be in its own subfolder containing a `.model3.json` file:
@@ -247,6 +530,7 @@ waifuland/
 │   ├── LAppLive2DManager.* # Model lifecycle management
 │   ├── LAppView.*          # View/projection matrices, rendering coordination
 │   ├── LAppModel.*         # Individual Live2D model instance
+│   ├── LAppIPC.*           # IPC socket server for external control
 │   └── LAppDefine.*        # Global constants and configuration
 ├── protocol/               # Wayland protocol XML files
 │   ├── xdg-shell.xml

@@ -20,6 +20,7 @@
 #include "LAppDefine.hpp"
 #include "LAppLive2DManager.hpp"
 #include "LAppTextureManager.hpp"
+#include "LAppIPC.hpp"
 
 using namespace Csm;
 using namespace std;
@@ -108,10 +109,15 @@ bool LAppDelegate::Initialize()
     _view->Initialize(_windowWidth, _windowHeight);
     _view->InitializeSprite();
 
+    // Initialize IPC socket server
+    LAppIPC::GetInstance()->Initialize();
+
     return true;
 }
 void LAppDelegate::Release()
 {
+    LAppIPC::ReleaseInstance();
+
     CleanWaylandContext(&_wlContext);
 
     delete _textureManager;
@@ -157,6 +163,9 @@ void LAppDelegate::Run()
             int local_y = hy - out->y;
             OnMouseCallBack(nullptr, (double)local_x, (double)local_y);
         }
+
+        // Poll IPC commands
+        LAppIPC::GetInstance()->Poll();
 
         LAppPal::UpdateTime();
 
