@@ -104,16 +104,41 @@ step "Checking Live2D Cubism SDK"
 if [ -d "$SDK_DIR" ] && [ -f "$SDK_DIR/Core/include/Live2DCubismCore.h" ]; then
     success "Cubism SDK found at ./$SDK_DIR"
 else
-    error "Cubism SDK not found at ./$SDK_DIR"
+    warn "Cubism SDK not found at ./$SDK_DIR"
     echo ""
-    info  "Please download the Live2D Cubism SDK for Native from:"
-    info  "  https://www.live2d.com/en/sdk/about/"
-    info  ""
-    info  "Extract it to this directory so the structure looks like:"
-    info  "  $(pwd)/$SDK_DIR/"
-    info  ""
-    info  "If the folder name differs, update SDK_ROOT_PATH in CMakeLists.txt."
-    exit 1
+    info "To automatically download the Live2D Cubism SDK, you must agree to the following licenses:"
+    info "1. https://www.live2d.com/eula/live2d-proprietary-software-license-agreement_en.html"
+    info "2. https://www.live2d.com/eula/live2d-open-software-license-agreement_en.html"
+    echo ""
+    read -p "Do you agree to the Live2D Software License Agreements? [y/N] " CONSENT
+    if [[ "$CONSENT" =~ ^[Yy]$ ]]; then
+        info "Downloading Live2D Cubism SDK for Native 5-r.5..."
+        SDK_URL="https://cubism.live2d.com/sdk-native/bin/CubismSdkForNative-5-r.5.zip?event=cubism_sdk_download&sdk_type=Native&user_status=update&user_type=&version=5-r.5&lang=en"
+        if curl -fsSL -o "CubismSdkForNative-5-r.5.zip" "$SDK_URL"; then
+            success "SDK downloaded"
+            info "Extracting SDK..."
+            unzip -oq "CubismSdkForNative-5-r.5.zip" -d "."
+            rm -f "CubismSdkForNative-5-r.5.zip"
+            if [ -d "$SDK_DIR" ] && [ -f "$SDK_DIR/Core/include/Live2DCubismCore.h" ]; then
+                success "Cubism SDK successfully installed to ./$SDK_DIR"
+            else
+                error "SDK extraction failed or structure is incorrect."
+                exit 1
+            fi
+        else
+            error "Failed to download Cubism SDK. Please check your internet connection or download manually."
+            exit 1
+        fi
+    else
+        error "License agreement not accepted."
+        echo ""
+        info  "Please download the Live2D Cubism SDK for Native manually from:"
+        info  "  https://www.live2d.com/en/sdk/about/"
+        info  ""
+        info  "Extract it to this directory so the structure looks like:"
+        info  "  $(pwd)/$SDK_DIR/"
+        exit 1
+    fi
 fi
 
 # ─── Step 3: Download third-party dependencies (GLEW & GLFW) ─────────────────
