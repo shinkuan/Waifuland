@@ -125,6 +125,11 @@ public:
      */
     void SetViewMatrix(Live2D::Cubism::Framework::CubismMatrix44* m);
 
+    /**
+     * @brief   Get the current scene (model) index.
+     */
+    Csm::csmInt32 GetSceneIndex() const { return _sceneIndex; }
+
 private:
     /**
     * @brief  コンストラクタ
