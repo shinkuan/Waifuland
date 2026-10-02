@@ -29,9 +29,35 @@ static void pointer_handle_button(void *data, struct wl_pointer *wl_pointer, uin
         LAppDelegate::GetInstance()->OnMouseCallBack(nullptr, glfw_btn, glfw_action, 0);
     }
 }
+// Scroll-direction tracking: under high-resolution scrolling (seat >= 5/8)
+// the axis event can arrive with value 0 while axis_discrete / axis_value120
+// carry the actual direction. Track those, prefer them when nonzero.
+static int g_scrollDiscrete = 0;   // from axis_discrete (seat >= 5)
+static int g_scrollValue120 = 0;   // from axis_value120 (seat >= 8)
+
 static void pointer_handle_axis(void *data, struct wl_pointer *wl_pointer, uint32_t time, uint32_t axis, wl_fixed_t value) {
+    if (axis != WL_POINTER_AXIS_VERTICAL_SCROLL) return; // only vertical scroll zooms
     double offset = wl_fixed_to_double(value);
-    LAppDelegate::GetInstance()->OnScrollCallBack(nullptr, 0, offset > 0 ? -1 : 1);
+    int dir = 0;
+    if (g_scrollValue120 != 0)      dir = (g_scrollValue120 > 0) ? -1 : 1;
+    else if (g_scrollDiscrete != 0) dir = (g_scrollDiscrete > 0) ? -1 : 1;
+    else if (offset > 0)            dir = -1;
+    else if (offset < 0)            dir = 1;
+    g_scrollValue120 = 0;
+    g_scrollDiscrete = 0;
+    if (dir != 0) {
+        LAppDelegate::GetInstance()->OnScrollCallBack(nullptr, 0, dir);
+    }
+}
+
+static void pointer_handle_frame(void *data, struct wl_pointer *wl_pointer) {}
+static void pointer_handle_axis_source(void *data, struct wl_pointer *wl_pointer, uint32_t axis_source) {}
+static void pointer_handle_axis_stop(void *data, struct wl_pointer *wl_pointer, uint32_t time, uint32_t axis) {}
+static void pointer_handle_axis_discrete(void *data, struct wl_pointer *wl_pointer, uint32_t axis, int32_t discrete) {
+    if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL) g_scrollDiscrete = discrete;
+}
+static void pointer_handle_axis_value120(void *data, struct wl_pointer *wl_pointer, uint32_t axis, int32_t value120) {
+    if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL) g_scrollValue120 = value120;
 }
 
 static const struct wl_pointer_listener pointer_listener = {
@@ -40,6 +66,11 @@ static const struct wl_pointer_listener pointer_listener = {
     pointer_handle_motion,
     pointer_handle_button,
     pointer_handle_axis,
+    pointer_handle_frame,
+    pointer_handle_axis_source,
+    pointer_handle_axis_stop,
+    pointer_handle_axis_discrete,
+    pointer_handle_axis_value120,
 };
 
 // --- Wayland Seat Handlers ---
@@ -120,7 +151,9 @@ static void registry_handle_global(void *data, struct wl_registry *registry, uin
     } else if (strcmp(interface, wl_shm_interface.name) == 0) {
         wl->shm = static_cast<wl_shm*>(wl_registry_bind(registry, name, &wl_shm_interface, 1));
     } else if (strcmp(interface, wl_seat_interface.name) == 0) {
-        wl->seat = static_cast<wl_seat*>(wl_registry_bind(registry, name, &wl_seat_interface, 1));
+        // Bind the highest seat version we understand (need >= 8 for axis_value120)
+        uint32_t seat_version = version < 8 ? version : 8;
+        wl->seat = static_cast<wl_seat*>(wl_registry_bind(registry, name, &wl_seat_interface, seat_version));
         wl_seat_add_listener(wl->seat, &seat_listener, wl);
     } else if (strcmp(interface, zwlr_layer_shell_v1_interface.name) == 0) {
         wl->layer_shell = static_cast<zwlr_layer_shell_v1*>(wl_registry_bind(registry, name, &zwlr_layer_shell_v1_interface, 1));
