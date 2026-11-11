@@ -12,8 +12,10 @@
 static void pointer_handle_enter(void *data, struct wl_pointer *wl_pointer, uint32_t serial, struct wl_surface *surface, wl_fixed_t surface_x, wl_fixed_t surface_y) {}
 static void pointer_handle_leave(void *data, struct wl_pointer *wl_pointer, uint32_t serial, struct wl_surface *surface) {}
 static void pointer_handle_motion(void *data, struct wl_pointer *wl_pointer, uint32_t time, wl_fixed_t surface_x, wl_fixed_t surface_y) {
-    double x = wl_fixed_to_double(surface_x);
-    double y = wl_fixed_to_double(surface_y);
+    // Surface coordinates are logical; the app works in buffer pixels.
+    WaylandContext* wl = static_cast<WaylandContext*>(data);
+    double x = wl_fixed_to_double(surface_x) * wl->scale;
+    double y = wl_fixed_to_double(surface_y) * wl->scale;
     LAppDelegate::GetInstance()->OnMouseCallBack(nullptr, x, y);
 }
 static void pointer_handle_button(void *data, struct wl_pointer *wl_pointer, uint32_t serial, uint32_t time, uint32_t button, uint32_t state) {
@@ -91,20 +93,70 @@ static const struct wl_seat_listener seat_listener = {
     seat_handle_name,
 };
 
+// --- Surface scale (wp_fractional_scale_v1 + wp_viewporter) ---
+// Render at logical size * scale and let the viewport map the buffer back to
+// the logical size, so fractionally scaled outputs get a native-resolution
+// buffer instead of a compositor-upscaled one.
+static void ApplySurfaceScale(WaylandContext* wl) {
+    if (wl->width <= 0 || wl->height <= 0) return;
+    double scale = wl->viewport ? wl->scale : 1.0;
+    wl->buffer_width = (int)(wl->width * scale + 0.5);
+    wl->buffer_height = (int)(wl->height * scale + 0.5);
+    if (wl->viewport) {
+        wp_viewport_set_destination(wl->viewport, wl->width, wl->height);
+    }
+    if (wl->egl_window) {
+        wl_egl_window_resize(wl->egl_window, wl->buffer_width, wl->buffer_height, 0, 0);
+    }
+}
+
+static void fractional_scale_handle_preferred_scale(void* data, struct wp_fractional_scale_v1* fractional_scale, uint32_t scale) {
+    WaylandContext* wl = static_cast<WaylandContext*>(data);
+    double new_scale = scale / 120.0;
+    if (new_scale == wl->scale) return;
+    wl->scale = new_scale;
+    ApplySurfaceScale(wl);
+    LAppPal::PrintLogLn("[Wayland] Preferred scale %.3f, buffer %dx%d", wl->scale, wl->buffer_width, wl->buffer_height);
+}
+
+static const struct wp_fractional_scale_v1_listener fractional_scale_listener = {
+    fractional_scale_handle_preferred_scale,
+};
+
+static void AttachSurfaceScaling(WaylandContext* wl) {
+    if (wl->viewporter) {
+        wl->viewport = wp_viewporter_get_viewport(wl->viewporter, wl->surface);
+    }
+    if (wl->viewporter && wl->fractional_scale_manager) {
+        wl->fractional_scale = wp_fractional_scale_manager_v1_get_fractional_scale(wl->fractional_scale_manager, wl->surface);
+        wp_fractional_scale_v1_add_listener(wl->fractional_scale, &fractional_scale_listener, wl);
+    }
+}
+
+static void DetachSurfaceScaling(WaylandContext* wl) {
+    if (wl->fractional_scale) {
+        wp_fractional_scale_v1_destroy(wl->fractional_scale);
+        wl->fractional_scale = nullptr;
+    }
+    if (wl->viewport) {
+        wp_viewport_destroy(wl->viewport);
+        wl->viewport = nullptr;
+    }
+}
+
 // --- Layer Surface Handlers ---
 static void layer_surface_configure(void *data, struct zwlr_layer_surface_v1 *surface, uint32_t serial, uint32_t width, uint32_t height) {
     WaylandContext* wl = static_cast<WaylandContext*>(data);
     zwlr_layer_surface_v1_ack_configure(surface, serial);
     wl->width = width;
     wl->height = height;
-    
-    // Dynamically resize EGL buffer when configure passes the new size
-    if (wl->egl_window) {
-        wl_egl_window_resize(wl->egl_window, wl->width, wl->height, 0, 0);
-    }
-    
+
+    // Resizes the EGL buffer (logical size * scale) and the viewport
+    ApplySurfaceScale(wl);
+
     wl->configured = true;
-    std::cout << "[Wayland] Configured! width: " << wl->width << ", height: " << wl->height << std::endl;
+    std::cout << "[Wayland] Configured! width: " << wl->width << ", height: " << wl->height
+              << " (buffer " << wl->buffer_width << "x" << wl->buffer_height << ")" << std::endl;
 }
 static void layer_surface_closed(void *data, struct zwlr_layer_surface_v1 *surface) {
     LAppDelegate::GetInstance()->AppEnd();
@@ -224,6 +276,10 @@ static void registry_handle_global(void *data, struct wl_registry *registry, uin
         wl_output_add_listener(out, &output_listener, info);
         wl->outputs.push_back(info);
         AttachXdgOutput(wl, info);
+    } else if (strcmp(interface, wp_viewporter_interface.name) == 0) {
+        wl->viewporter = static_cast<wp_viewporter*>(wl_registry_bind(registry, name, &wp_viewporter_interface, 1));
+    } else if (strcmp(interface, wp_fractional_scale_manager_v1_interface.name) == 0) {
+        wl->fractional_scale_manager = static_cast<wp_fractional_scale_manager_v1*>(wl_registry_bind(registry, name, &wp_fractional_scale_manager_v1_interface, 1));
     } else if (strcmp(interface, zxdg_output_manager_v1_interface.name) == 0) {
         uint32_t xdg_version = version < 3 ? version : 3;
         wl->xdg_output_manager = static_cast<zxdg_output_manager_v1*>(wl_registry_bind(registry, name, &zxdg_output_manager_v1_interface, xdg_version));
@@ -388,6 +444,7 @@ bool SetupWaylandContext(WaylandContext* wl, int width, int height) {
     // Create Wayland & Layer Surface
     wl->surface = wl_compositor_create_surface(wl->compositor);
     wl_surface_add_listener(wl->surface, &surface_listener, wl);
+    AttachSurfaceScaling(wl);
     
     // Choose OVERLAY or TOP for mascot. TOP gives desktop layer. OVERLAY gives full screen layer (above panels).
     wl->layer_surface = zwlr_layer_shell_v1_get_layer_surface(
@@ -404,7 +461,8 @@ bool SetupWaylandContext(WaylandContext* wl, int width, int height) {
     wl_display_roundtrip(wl->display); // Wait for configure event
 
     // Now we have the configured width/height
-    wl->egl_window = wl_egl_window_create(wl->surface, wl->width, wl->height);
+    ApplySurfaceScale(wl);
+    wl->egl_window = wl_egl_window_create(wl->surface, wl->buffer_width, wl->buffer_height);
     wl->egl_surface = eglCreateWindowSurface(wl->egl_display, wl->egl_config, (EGLNativeWindowType)wl->egl_window, nullptr);
     if (wl->egl_surface == EGL_NO_SURFACE) {
         LAppPal::PrintLogLn("Failed to create EGL surface");
@@ -425,6 +483,7 @@ void CleanWaylandContext(WaylandContext* wl) {
         eglTerminate(wl->egl_display);
     }
     if (wl->egl_window) wl_egl_window_destroy(wl->egl_window);
+    DetachSurfaceScaling(wl);
     if (wl->layer_surface) zwlr_layer_surface_v1_destroy(wl->layer_surface);
     if (wl->surface) wl_surface_destroy(wl->surface);
     if (wl->layer_shell) zwlr_layer_shell_v1_destroy(wl->layer_shell);
@@ -432,6 +491,8 @@ void CleanWaylandContext(WaylandContext* wl) {
         if (wl->outputs[i]->xdg_output) zxdg_output_v1_destroy(wl->outputs[i]->xdg_output);
     }
     if (wl->xdg_output_manager) zxdg_output_manager_v1_destroy(wl->xdg_output_manager);
+    if (wl->fractional_scale_manager) wp_fractional_scale_manager_v1_destroy(wl->fractional_scale_manager);
+    if (wl->viewporter) wp_viewporter_destroy(wl->viewporter);
     if (wl->pointer) wl_pointer_destroy(wl->pointer);
     if (wl->seat) wl_seat_destroy(wl->seat);
     if (wl->shm) wl_shm_destroy(wl->shm);
@@ -525,6 +586,7 @@ void SwitchWaylandOutputToMonitor(int hx, int hy) {
         zwlr_layer_surface_v1_destroy(g_wl->layer_surface);
         g_wl->layer_surface = nullptr;
     }
+    DetachSurfaceScaling(g_wl);
     if (g_wl->surface) {
         wl_surface_destroy(g_wl->surface);
         g_wl->surface = nullptr;
@@ -533,6 +595,7 @@ void SwitchWaylandOutputToMonitor(int hx, int hy) {
     // Switch to new output
     g_wl->surface = wl_compositor_create_surface(g_wl->compositor);
     wl_surface_add_listener(g_wl->surface, &surface_listener, g_wl);
+    AttachSurfaceScaling(g_wl);
     wl_output* output = g_wl->outputs[g_wl->current_output_index]->output;
     
     g_wl->layer_surface = zwlr_layer_shell_v1_get_layer_surface(
@@ -547,7 +610,8 @@ void SwitchWaylandOutputToMonitor(int hx, int hy) {
     wl_surface_commit(g_wl->surface);
     wl_display_roundtrip(g_wl->display);
     
-    g_wl->egl_window = wl_egl_window_create(g_wl->surface, g_wl->width, g_wl->height);
+    ApplySurfaceScale(g_wl);
+    g_wl->egl_window = wl_egl_window_create(g_wl->surface, g_wl->buffer_width, g_wl->buffer_height);
     g_wl->egl_surface = eglCreateWindowSurface(g_wl->egl_display, g_wl->egl_config, (EGLNativeWindowType)g_wl->egl_window, nullptr);
     eglMakeCurrent(g_wl->egl_display, g_wl->egl_surface, g_wl->egl_surface, g_wl->egl_context);
     eglSwapInterval(g_wl->egl_display, 1);

@@ -124,6 +124,13 @@ public:
     std::vector<std::string> GetActiveToggledExpressions() const;
 
     /**
+     * @brief   Point the model looks from (its eyes), in model view space
+     *          (after the model matrix). Leaves x/y untouched and returns
+     *          false if no origin could be determined.
+     */
+    Csm::csmBool GetLookOrigin(Csm::csmFloat32& x, Csm::csmFloat32& y);
+
+    /**
     * @brief   イベントの発火を受け取る
     *
     */
@@ -196,6 +203,15 @@ private:
      *        this model (the SDK default of one texture only fits 36 masks).
      */
     void CreateRendererForModel();
+
+    /**
+     * @brief Locate the eyes in model space: the drawables that move when
+     *        ParamEyeBallX changes, falling back to the "Head" hit area.
+     */
+    void ComputeLookOrigin();
+    Csm::csmBool _hasLookOrigin;
+    Csm::csmFloat32 _lookOriginX; ///< Model (canvas) units
+    Csm::csmFloat32 _lookOriginY;
     Csm::csmVector<Csm::ACubismMotion*> _autoMotions;
     ExpressionToggleUpdater* _expressionToggles; ///< Owned by _updateScheduler
 

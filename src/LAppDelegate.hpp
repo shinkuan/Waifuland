@@ -160,8 +160,6 @@ private:
     int _dragStartY;
     int _windowStartX;
     int _windowStartY;
-    float _lookCenterX;
-    float _lookCenterY;
     
 public:
     bool _isHidden = false;
@@ -175,12 +173,6 @@ public:
     float _modelY;
 
 public:
-    void SetLookCenter(float x, float y) {
-        _lookCenterX = x;
-        _lookCenterY = y;
-    }
-    float GetLookCenterX() const { return _lookCenterX; }
-    float GetLookCenterY() const { return _lookCenterY; }
     void OnScrollCallBack(void* window, double xoffset, double yoffset);
 
 };

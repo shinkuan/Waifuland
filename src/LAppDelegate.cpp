@@ -19,6 +19,7 @@
 #include "LAppWaylandRegion.hpp"
 #include "LAppDefine.hpp"
 #include "LAppLive2DManager.hpp"
+#include "LAppModel.hpp"
 #include "LAppTextureManager.hpp"
 #include "LAppIPC.hpp"
 
@@ -135,8 +136,9 @@ void LAppDelegate::Run()
         }
         wl_display_flush(_wlContext.display);
         
-        int width = _wlContext.width;
-        int height = _wlContext.height;
+        // Render at buffer resolution (logical size * fractional scale)
+        int width = _wlContext.buffer_width;
+        int height = _wlContext.buffer_height;
 
         if((_windowWidth!=width || _windowHeight!=height) && width>0 && height>0) {
             _view->Initialize(width, height);
@@ -159,9 +161,10 @@ void LAppDelegate::Run()
             int current_idx = _wlContext.current_output_index;
             WaylandContext::OutputInfo* out = _wlContext.outputs[current_idx];
             
-            int local_x = hx - out->x;
-            int local_y = hy - out->y;
-            OnMouseCallBack(nullptr, (double)local_x, (double)local_y);
+            // Global cursor is in logical coordinates; convert to buffer pixels
+            double local_x = (hx - out->x) * _wlContext.scale;
+            double local_y = (hy - out->y) * _wlContext.scale;
+            OnMouseCallBack(nullptr, local_x, local_y);
         }
 
         // Poll IPC commands
@@ -202,8 +205,6 @@ LAppDelegate::LAppDelegate():
     _dragStartY(0),
     _windowStartX(0),
     _windowStartY(0),
-    _lookCenterX(0.5f),
-    _lookCenterY(0.5f),
     _modelScale(1.0f),
     _modelX(0.0f),
     _modelY(0.0f)
@@ -350,12 +351,20 @@ void LAppDelegate::OnMouseCallBack(void* window, double x, double y)
         return;
     }
 
-    // Calculate viewX / viewY based on look center
+    // Look direction is measured from the model's eyes to the cursor.
+    // A point (px, py) in model view space is drawn at
+    //   screenX = w/2 + scale * (px + modelX) * h/2
+    //   screenY = h/2 - scale * (py + modelY) * h/2
+    // (see the projection in LAppLive2DManager::OnUpdate).
     int width, height;
     width = _windowWidth; height = _windowHeight;
-    
-    float faceCenterX = ((float)width * _lookCenterX) + (_modelX * _modelScale * ((float)height / 2.0f));
-    float faceCenterY = ((float)height * _lookCenterY) - (_modelY * _modelScale * ((float)height / 2.0f));
+
+    float originX = 0.0f, originY = 0.0f; // model center as fallback
+    LAppModel* model = LAppLive2DManager::GetInstance()->GetModel(0);
+    if (model) model->GetLookOrigin(originX, originY);
+
+    float faceCenterX = ((float)width * 0.5f) + ((originX + _modelX) * _modelScale * ((float)height / 2.0f));
+    float faceCenterY = ((float)height * 0.5f) - ((originY + _modelY) * _modelScale * ((float)height / 2.0f));
 
     float viewX = (_mouseX - faceCenterX) / ((float)width / 2.0f);
     float viewY = -(_mouseY - faceCenterY) / ((float)height / 2.0f);

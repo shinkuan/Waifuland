@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <map>
 #include <cmath>
+#include <cfloat>
 #include <Utils/CubismJson.hpp>
 #include <Math/CubismMath.hpp>
 #include <Motion/CubismExpressionMotion.hpp>
@@ -219,6 +220,9 @@ LAppModel::LAppModel()
     , _lastExpressionTime(-1.0f)
     , _nextExpressionIndex(0)
     , _expressionToggles(NULL)
+    , _hasLookOrigin(false)
+    , _lookOriginX(0.0f)
+    , _lookOriginY(0.0f)
 {
     if (DebugLogEnable)
     {
@@ -524,6 +528,8 @@ void LAppModel::SetupModel(ICubismModelSetting* setting)
     csmMap<csmString, csmFloat32> layout;
     _modelSetting->GetLayoutMap(layout);
     _modelMatrix->SetupFromLayout(layout);
+
+    ComputeLookOrigin();
 
     _model->SaveParameters();
 
@@ -1000,6 +1006,102 @@ csmInt32 CountClippingContexts(csmInt32 objectCount, const csmInt32* maskCounts,
     }
     return static_cast<csmInt32>(contexts.size());
 }
+}
+
+void LAppModel::ComputeLookOrigin()
+{
+    _hasLookOrigin = false;
+    const csmInt32 drawableCount = _model->GetDrawableCount();
+
+    // 1. Drawables moved by the eyeball parameter are the pupils/irises.
+    const csmInt32 paramIndex = _model->GetParameterIndex(_idParamEyeBallX);
+    if (paramIndex >= 0 && paramIndex < _model->GetParameterCount())
+    {
+        const csmFloat32 original = _model->GetParameterValue(paramIndex);
+
+        _model->Update();
+        std::vector<std::vector<csmFloat32> > base(drawableCount);
+        std::vector<bool> visible(drawableCount);
+        for (csmInt32 i = 0; i < drawableCount; ++i)
+        {
+            const csmInt32 n = _model->GetDrawableVertexCount(i) * 2;
+            const csmFloat32* v = _model->GetDrawableVertices(i);
+            base[i].assign(v, v + n);
+            visible[i] = _model->GetDrawableDynamicFlagIsVisible(i) && _model->GetDrawableOpacity(i) > 0.0f;
+        }
+
+        _model->SetParameterValue(paramIndex, _model->GetParameterMaximumValue(paramIndex));
+        _model->Update();
+
+        const csmFloat32 eps = _model->GetCanvasHeight() * 0.001f;
+        csmFloat32 minX = FLT_MAX, minY = FLT_MAX, maxX = -FLT_MAX, maxY = -FLT_MAX;
+        csmInt32 moved = 0;
+        for (csmInt32 i = 0; i < drawableCount; ++i)
+        {
+            if (!visible[i]) continue;
+            const csmFloat32* v = _model->GetDrawableVertices(i);
+            bool changed = false;
+            for (size_t k = 0; k < base[i].size(); ++k)
+            {
+                if (std::fabs(v[k] - base[i][k]) > eps) { changed = true; break; }
+            }
+            if (!changed) continue;
+            ++moved;
+            for (size_t k = 0; k + 1 < base[i].size(); k += 2)
+            {
+                minX = std::min(minX, base[i][k]);     maxX = std::max(maxX, base[i][k]);
+                minY = std::min(minY, base[i][k + 1]); maxY = std::max(maxY, base[i][k + 1]);
+            }
+        }
+
+        _model->SetParameterValue(paramIndex, original);
+        _model->Update();
+
+        if (moved > 0)
+        {
+            _lookOriginX = (minX + maxX) * 0.5f;
+            _lookOriginY = (minY + maxY) * 0.5f;
+            _hasLookOrigin = true;
+            if (_debugMode)
+            {
+                LAppPal::PrintLogLn("[APP]look origin from %d eye drawables: (%.3f, %.3f), bounds x[%.3f, %.3f] y[%.3f, %.3f]",
+                                    moved, _lookOriginX, _lookOriginY, minX, maxX, minY, maxY);
+            }
+            return;
+        }
+    }
+
+    // 2. Center of the "Head" hit area.
+    for (csmInt32 i = 0; i < _modelSetting->GetHitAreasCount(); ++i)
+    {
+        if (strcmp(_modelSetting->GetHitAreaName(i), HitAreaNameHead) != 0) continue;
+        const csmInt32 drawable = _model->GetDrawableIndex(_modelSetting->GetHitAreaId(i));
+        if (drawable < 0 || drawable >= drawableCount) break;
+        const csmInt32 n = _model->GetDrawableVertexCount(drawable);
+        const csmFloat32* v = _model->GetDrawableVertices(drawable);
+        if (n <= 0) break;
+        csmFloat32 minX = FLT_MAX, minY = FLT_MAX, maxX = -FLT_MAX, maxY = -FLT_MAX;
+        for (csmInt32 k = 0; k < n; ++k)
+        {
+            minX = std::min(minX, v[k * 2]);     maxX = std::max(maxX, v[k * 2]);
+            minY = std::min(minY, v[k * 2 + 1]); maxY = std::max(maxY, v[k * 2 + 1]);
+        }
+        _lookOriginX = (minX + maxX) * 0.5f;
+        _lookOriginY = (minY + maxY) * 0.5f;
+        _hasLookOrigin = true;
+        if (_debugMode) LAppPal::PrintLogLn("[APP]look origin from Head hit area: (%.3f, %.3f)", _lookOriginX, _lookOriginY);
+        return;
+    }
+
+    if (_debugMode) LAppPal::PrintLogLn("[APP]look origin: not found, using model center");
+}
+
+csmBool LAppModel::GetLookOrigin(csmFloat32& x, csmFloat32& y)
+{
+    if (!_hasLookOrigin || _modelMatrix == NULL) return false;
+    x = _modelMatrix->TransformX(_lookOriginX);
+    y = _modelMatrix->TransformY(_lookOriginY);
+    return true;
 }
 
 void LAppModel::CreateRendererForModel()

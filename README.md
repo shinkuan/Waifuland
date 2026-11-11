@@ -563,6 +563,8 @@ waifuland/
 ├── protocol/               # Wayland protocol XML files
 │   ├── xdg-shell.xml
 │   ├── xdg-output-unstable-v1.xml
+│   ├── fractional-scale-v1.xml
+│   ├── viewporter.xml
 │   └── wlr-layer-shell-unstable-v1.xml
 ├── thirdParty/             # Third-party dependencies (GLEW, stb)
 ├── cmake/                  # CMake helper scripts
