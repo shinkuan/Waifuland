@@ -334,9 +334,12 @@ Returns current model, zoom, position, and visibility.
 ```json
 {
     "ok": true,
-    "expressions": ["happy.exp3.json", "angry.exp3.json", "sad.exp3.json"]
+    "expressions": ["happy.exp3.json", "angry.exp3.json", "sad.exp3.json"],
+    "active": []
 }
 ```
+
+`active` lists the expressions currently switched on with `toggle_expression`.
 
 #### `set_expression` — Set expression by ID
 
@@ -349,6 +352,31 @@ Returns current model, zoom, position, and visibility.
     "ok": true
 }
 ```
+
+Only one expression is active at a time with `set_expression`; it reverts after `emotion_timeout`. An unknown ID returns `{"ok":false,"error":"unknown expression: ..."}`.
+
+#### `toggle_expression` — Toggle a stackable expression
+
+```bash
+./waifuland-ctl toggle_expression --id "glasses"
+```
+
+```json
+{
+    "ok": true,
+    "active": true
+}
+```
+
+Toggled expressions stack with each other and with `set_expression`, and never time out, like VTube Studio expression hotkeys. Use them for outfit/accessory switches (glasses, skirt length, etc.).
+
+#### `clear_expressions` — Remove all expressions
+
+```bash
+./waifuland-ctl clear_expressions
+```
+
+Turns off every toggled expression and the current `set_expression` one.
 
 #### `get_motions` — List motions for current model
 
@@ -534,6 +562,7 @@ waifuland/
 │   └── LAppDefine.*        # Global constants and configuration
 ├── protocol/               # Wayland protocol XML files
 │   ├── xdg-shell.xml
+│   ├── xdg-output-unstable-v1.xml
 │   └── wlr-layer-shell-unstable-v1.xml
 ├── thirdParty/             # Third-party dependencies (GLEW, stb)
 ├── cmake/                  # CMake helper scripts

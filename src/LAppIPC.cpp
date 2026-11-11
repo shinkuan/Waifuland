@@ -238,6 +238,48 @@ static std::string JsonEscape(const std::string& s)
     return out;
 }
 
+static bool ParseHex4(const std::string& s, size_t pos, unsigned int& out)
+{
+    if (pos + 4 > s.size()) return false;
+    out = 0;
+    for (size_t i = pos; i < pos + 4; ++i)
+    {
+        char c = s[i];
+        out <<= 4;
+        if (c >= '0' && c <= '9') out |= (unsigned int)(c - '0');
+        else if (c >= 'a' && c <= 'f') out |= (unsigned int)(c - 'a' + 10);
+        else if (c >= 'A' && c <= 'F') out |= (unsigned int)(c - 'A' + 10);
+        else return false;
+    }
+    return true;
+}
+
+static void AppendUtf8(std::string& out, unsigned int cp)
+{
+    if (cp < 0x80)
+    {
+        out += (char)cp;
+    }
+    else if (cp < 0x800)
+    {
+        out += (char)(0xC0 | (cp >> 6));
+        out += (char)(0x80 | (cp & 0x3F));
+    }
+    else if (cp < 0x10000)
+    {
+        out += (char)(0xE0 | (cp >> 12));
+        out += (char)(0x80 | ((cp >> 6) & 0x3F));
+        out += (char)(0x80 | (cp & 0x3F));
+    }
+    else
+    {
+        out += (char)(0xF0 | (cp >> 18));
+        out += (char)(0x80 | ((cp >> 12) & 0x3F));
+        out += (char)(0x80 | ((cp >> 6) & 0x3F));
+        out += (char)(0x80 | (cp & 0x3F));
+    }
+}
+
 // Very simple key extraction from a flat JSON object. Returns empty string if not found.
 static std::string JsonGetString(const std::string& json, const std::string& key)
 {
@@ -264,6 +306,38 @@ static std::string JsonGetString(const std::string& json, const std::string& key
             if (json[pos] == '\\' && pos + 1 < json.size())
             {
                 pos++;
+                char esc = json[pos];
+                if (esc == 'u')
+                {
+                    unsigned int cp = 0;
+                    if (!ParseHex4(json, pos + 1, cp)) return val;
+                    pos += 4;
+                    // UTF-16 surrogate pair: 😀
+                    if (cp >= 0xD800 && cp <= 0xDBFF &&
+                        pos + 2 < json.size() && json[pos + 1] == '\\' && json[pos + 2] == 'u')
+                    {
+                        unsigned int lo = 0;
+                        if (ParseHex4(json, pos + 3, lo) && lo >= 0xDC00 && lo <= 0xDFFF)
+                        {
+                            cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                            pos += 6;
+                        }
+                    }
+                    AppendUtf8(val, cp);
+                    pos++;
+                    continue;
+                }
+                switch (esc)
+                {
+                case 'n': val += '\n'; break;
+                case 't': val += '\t'; break;
+                case 'r': val += '\r'; break;
+                case 'b': val += '\b'; break;
+                case 'f': val += '\f'; break;
+                default:  val += esc;  break; // \" \\ \/
+                }
+                pos++;
+                continue;
             }
             val += json[pos];
             pos++;
@@ -390,8 +464,50 @@ std::string LAppIPC::ProcessCommand(const std::string& json)
             if (i > 0) oss << ",";
             oss << "\"" << JsonEscape(exprs[i]) << "\"";
         }
+        oss << "],\"active\":[";
+        std::vector<std::string> active = model->GetActiveToggledExpressions();
+        for (size_t i = 0; i < active.size(); i++)
+        {
+            if (i > 0) oss << ",";
+            oss << "\"" << JsonEscape(active[i]) << "\"";
+        }
         oss << "]}";
         return oss.str();
+    }
+
+    // ── toggle_expression ──
+    if (command == "toggle_expression")
+    {
+        LAppModel* model = mgr->GetModel(0);
+        if (!model)
+        {
+            return "{\"ok\":false,\"error\":\"no model loaded\"}";
+        }
+
+        std::string id = JsonGetString(json, "id");
+        if (id.empty())
+        {
+            return "{\"ok\":false,\"error\":\"missing 'id'\"}";
+        }
+
+        csmBool active = false;
+        if (!model->ToggleExpression(id.c_str(), active))
+        {
+            return "{\"ok\":false,\"error\":\"unknown expression: " + JsonEscape(id) + "\"}";
+        }
+        return std::string("{\"ok\":true,\"active\":") + (active ? "true" : "false") + "}";
+    }
+
+    // ── clear_expressions ──
+    if (command == "clear_expressions")
+    {
+        LAppModel* model = mgr->GetModel(0);
+        if (!model)
+        {
+            return "{\"ok\":false,\"error\":\"no model loaded\"}";
+        }
+        model->ClearExpressions();
+        return "{\"ok\":true}";
     }
 
     // ── set_expression ──
@@ -409,7 +525,10 @@ std::string LAppIPC::ProcessCommand(const std::string& json)
             return "{\"ok\":false,\"error\":\"missing 'id'\"}";
         }
 
-        model->SetExpression(id.c_str());
+        if (!model->SetExpression(id.c_str()))
+        {
+            return "{\"ok\":false,\"error\":\"unknown expression: " + JsonEscape(id) + "\"}";
+        }
         return "{\"ok\":true}";
     }
 

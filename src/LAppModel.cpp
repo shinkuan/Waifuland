@@ -11,6 +11,13 @@
 #include <stdlib.h>
 #include <fstream>
 #include <vector>
+#include <algorithm>
+#include <map>
+#include <cmath>
+#include <Utils/CubismJson.hpp>
+#include <Math/CubismMath.hpp>
+#include <Motion/CubismExpressionMotion.hpp>
+#include <Motion/ICubismUpdater.hpp>
 #include <CubismModelSettingJson.hpp>
 #include <Motion/CubismMotion.hpp>
 #include <Physics/CubismPhysics.hpp>
@@ -38,6 +45,169 @@ using namespace Live2D::Cubism::Framework;
 using namespace Live2D::Cubism::Framework::DefaultParameterId;
 using namespace LAppDefine;
 
+
+// Stackable expression layers applied right after the regular expression
+// manager and before physics, so toggles feeding physics inputs still work.
+class ExpressionToggleUpdater : public ICubismUpdater
+{
+public:
+    ExpressionToggleUpdater() : ICubismUpdater(CubismUpdateOrder_Expression + 1) {}
+
+    // Returns the new state.
+    csmBool Toggle(const std::string& name, CubismExpressionMotion* expression)
+    {
+        for (size_t i = 0; i < _layers.size(); ++i)
+        {
+            if (_layers[i].name == name)
+            {
+                _layers[i].active = !_layers[i].active;
+                return _layers[i].active;
+            }
+        }
+
+        Layer layer;
+        layer.name = name;
+        csmVector<CubismExpressionMotion::ExpressionParameter> params = expression->GetExpressionParameters();
+        for (csmUint32 i = 0; i < params.GetSize(); ++i) layer.params.push_back(params[i]);
+        layer.fadeIn = expression->GetFadeInTime();
+        layer.fadeOut = expression->GetFadeOutTime();
+        layer.weight = 0.0f;
+        layer.active = true;
+        _layers.push_back(layer);
+        return true;
+    }
+
+    void Clear()
+    {
+        for (size_t i = 0; i < _layers.size(); ++i) _layers[i].active = false;
+    }
+
+    std::vector<std::string> GetActive() const
+    {
+        std::vector<std::string> result;
+        for (size_t i = 0; i < _layers.size(); ++i)
+        {
+            if (_layers[i].active) result.push_back(_layers[i].name);
+        }
+        return result;
+    }
+
+    void OnLateUpdate(CubismModel* model, csmFloat32 deltaTimeSeconds) override
+    {
+        for (size_t i = 0; i < _layers.size();)
+        {
+            Layer& layer = _layers[i];
+            const csmFloat32 fade = layer.active ? layer.fadeIn : layer.fadeOut;
+            const csmFloat32 step = (fade > 0.0f) ? deltaTimeSeconds / fade : 1.0f;
+            layer.weight = layer.active ? std::min(1.0f, layer.weight + step)
+                                        : std::max(0.0f, layer.weight - step);
+            if (!layer.active && layer.weight <= 0.0f)
+            {
+                _layers.erase(_layers.begin() + i);
+                continue;
+            }
+
+            const csmFloat32 w = CubismMath::GetEasingSine(layer.weight);
+            for (size_t p = 0; p < layer.params.size(); ++p)
+            {
+                const CubismExpressionMotion::ExpressionParameter& param = layer.params[p];
+                switch (param.BlendType)
+                {
+                case CubismExpressionMotion::Additive:
+                    model->AddParameterValue(param.ParameterId, param.Value, w);
+                    break;
+                case CubismExpressionMotion::Multiply:
+                    model->MultiplyParameterValue(param.ParameterId, param.Value, w);
+                    break;
+                case CubismExpressionMotion::Overwrite:
+                    model->SetParameterValue(param.ParameterId, param.Value, w);
+                    break;
+                }
+            }
+            ++i;
+        }
+    }
+
+private:
+    struct Layer
+    {
+        std::string name;
+        std::vector<CubismExpressionMotion::ExpressionParameter> params;
+        csmFloat32 fadeIn;
+        csmFloat32 fadeOut;
+        csmFloat32 weight;
+        csmBool active;
+    };
+    std::vector<Layer> _layers;
+};
+
+namespace {
+typedef std::map<CubismIdHandle, CubismIdHandle> PhysicsSourceMap;
+
+// Map each physics output parameter that is fed by exactly one input parameter
+// to that input. Some models (typically made for VTube Studio) drive the
+// standard head/body angle parameters through physics from custom inputs
+// (e.g. AngleX -> ParamAngleX), so writing the standard parameter directly has
+// no visible effect: physics overwrites it every frame.
+PhysicsSourceMap BuildPhysicsSourceMap(const csmByte* buffer, csmSizeInt size)
+{
+    PhysicsSourceMap result;
+    std::map<CubismIdHandle, int> outputCount;
+    Utils::CubismJson* json = Utils::CubismJson::Create(buffer, size);
+    if (json == NULL) return result;
+
+    Utils::Value& settings = json->GetRoot()["PhysicsSettings"];
+    for (csmInt32 i = 0; i < settings.GetSize(); ++i)
+    {
+        Utils::Value& inputs = settings[i]["Input"];
+        Utils::Value& outputs = settings[i]["Output"];
+        for (csmInt32 o = 0; o < outputs.GetSize(); ++o)
+        {
+            CubismIdHandle dst = CubismFramework::GetIdManager()->GetId(outputs[o]["Destination"]["Id"].GetRawString());
+            outputCount[dst]++;
+            if (inputs.GetSize() == 1)
+            {
+                result[dst] = CubismFramework::GetIdManager()->GetId(inputs[0]["Source"]["Id"].GetRawString());
+            }
+        }
+    }
+    Utils::CubismJson::Delete(json);
+
+    // Ambiguous if several physics settings write the same parameter.
+    for (std::map<CubismIdHandle, int>::const_iterator it = outputCount.begin(); it != outputCount.end(); ++it)
+    {
+        if (it->second > 1) result.erase(it->first);
+    }
+    return result;
+}
+
+csmFloat32 ParameterMaxAbs(CubismModel* model, CubismIdHandle id)
+{
+    const csmInt32 index = model->GetParameterIndex(id);
+    if (index < 0 || index >= model->GetParameterCount()) return 0.0f;
+    return std::max(std::fabs(model->GetParameterMinimumValue(index)),
+                    std::fabs(model->GetParameterMaximumValue(index)));
+}
+
+// If `id` is overwritten by physics from a single input, return that input and
+// the factor converting a value on `id` to the input's range. Otherwise return
+// `id` unchanged with scale 1.
+CubismIdHandle ResolvePhysicsSource(const PhysicsSourceMap& sources, CubismModel* model,
+                                    CubismIdHandle id, csmFloat32& scale)
+{
+    scale = 1.0f;
+    PhysicsSourceMap::const_iterator it = sources.find(id);
+    if (it == sources.end()) return id;
+
+    const csmFloat32 dstRange = ParameterMaxAbs(model, id);
+    const csmFloat32 srcRange = ParameterMaxAbs(model, it->second);
+    if (dstRange <= 0.0f || srcRange <= 0.0f) return id;
+
+    scale = srcRange / dstRange;
+    return it->second;
+}
+}
+
 const csmFloat32 LAppModel::ExpressionTimeoutSeconds = 5.0f;
 
 LAppModel::LAppModel()
@@ -48,6 +218,7 @@ LAppModel::LAppModel()
     , _currentSkinIndex(0)
     , _lastExpressionTime(-1.0f)
     , _nextExpressionIndex(0)
+    , _expressionToggles(NULL)
 {
     if (DebugLogEnable)
     {
@@ -103,7 +274,7 @@ void LAppModel::LoadAssets(const csmChar* dir, const csmChar* fileName)
         return;
     }
 
-    CreateRenderer(LAppDelegate::GetInstance()->GetWindowWidth(), LAppDelegate::GetInstance()->GetWindowHeight());
+    CreateRendererForModel();
 
     SetupTextures();
 }
@@ -200,10 +371,14 @@ void LAppModel::SetupModel(ICubismModelSetting* setting)
         {
             CubismExpressionUpdater* expression = CSM_NEW CubismExpressionUpdater(*_expressionManager);
             _updateScheduler.AddUpdatableList(expression);
+
+            _expressionToggles = CSM_NEW ExpressionToggleUpdater();
+            _updateScheduler.AddUpdatableList(_expressionToggles);
         }
     }
 
     //Physics
+    PhysicsSourceMap physicsSources;
     if (strcmp(_modelSetting->GetPhysicsFileName(), "") != 0)
     {
         csmString path = _modelSetting->GetPhysicsFileName();
@@ -211,6 +386,7 @@ void LAppModel::SetupModel(ICubismModelSetting* setting)
 
         buffer = CreateBuffer(path.GetRawString(), &size);
         LoadPhysics(buffer, size);
+        if (buffer) physicsSources = BuildPhysicsSourceMap(buffer, size);
         DeleteBuffer(buffer, path.GetRawString());
 
         if (_physics != nullptr)
@@ -254,10 +430,15 @@ void LAppModel::SetupModel(ICubismModelSetting* setting)
 
         csmVector<CubismBreath::BreathParameterData> breathParameters;
 
-        breathParameters.PushBack(CubismBreath::BreathParameterData(_idParamAngleX, 0.0f, 15.0f, 6.5345f, 0.5f));
-        breathParameters.PushBack(CubismBreath::BreathParameterData(_idParamAngleY, 0.0f, 8.0f, 3.5345f, 0.5f));
-        breathParameters.PushBack(CubismBreath::BreathParameterData(_idParamAngleZ, 0.0f, 10.0f, 5.5345f, 0.5f));
-        breathParameters.PushBack(CubismBreath::BreathParameterData(_idParamBodyAngleX, 0.0f, 4.0f, 15.5345f, 0.5f));
+        const CubismIdHandle breathIds[] = { _idParamAngleX, _idParamAngleY, _idParamAngleZ, _idParamBodyAngleX };
+        const csmFloat32 breathPeaks[] = { 15.0f, 8.0f, 10.0f, 4.0f };
+        const csmFloat32 breathCycles[] = { 6.5345f, 3.5345f, 5.5345f, 15.5345f };
+        for (csmInt32 i = 0; i < 4; ++i)
+        {
+            csmFloat32 scale;
+            CubismIdHandle id = ResolvePhysicsSource(physicsSources, _model, breathIds[i], scale);
+            breathParameters.PushBack(CubismBreath::BreathParameterData(id, 0.0f, breathPeaks[i] * scale, breathCycles[i], 0.5f));
+        }
         breathParameters.PushBack(CubismBreath::BreathParameterData(CubismFramework::GetIdManager()->GetId(ParamBreath), 0.5f, 0.5f, 3.2345f, 0.5f));
 
         _breath->SetParameters(breathParameters);
@@ -303,14 +484,27 @@ void LAppModel::SetupModel(ICubismModelSetting* setting)
 
         csmVector<CubismLook::LookParameterData> lookParameters;
 
-        lookParameters.PushBack(CubismLook::LookParameterData(_idParamAngleX, 30.0f));
-        lookParameters.PushBack(CubismLook::LookParameterData(_idParamAngleY, 0.0f, 30.0f));
-        lookParameters.PushBack(CubismLook::LookParameterData(_idParamAngleZ, 0.0f, 0.0f, -30.0f));
-        lookParameters.PushBack(CubismLook::LookParameterData(_idParamBodyAngleX, 10.0f));
-        lookParameters.PushBack(CubismLook::LookParameterData(_idParamBodyAngleY, 0.0f, 10.0f));
-        lookParameters.PushBack(CubismLook::LookParameterData(_idParamBodyAngleZ, 0.0f, 0.0f, -10.0f));
-        lookParameters.PushBack(CubismLook::LookParameterData(_idParamEyeBallX, 1.0f));
-        lookParameters.PushBack(CubismLook::LookParameterData(_idParamEyeBallY, 0.0f, 1.0f));
+        struct { CubismIdHandle id; csmFloat32 fx, fy, fxy; } looks[] = {
+            { _idParamAngleX, 30.0f, 0.0f, 0.0f },
+            { _idParamAngleY, 0.0f, 30.0f, 0.0f },
+            { _idParamAngleZ, 0.0f, 0.0f, -30.0f },
+            { _idParamBodyAngleX, 10.0f, 0.0f, 0.0f },
+            { _idParamBodyAngleY, 0.0f, 10.0f, 0.0f },
+            { _idParamBodyAngleZ, 0.0f, 0.0f, -10.0f },
+            { _idParamEyeBallX, 1.0f, 0.0f, 0.0f },
+            { _idParamEyeBallY, 0.0f, 1.0f, 0.0f },
+        };
+        for (size_t i = 0; i < sizeof(looks) / sizeof(looks[0]); ++i)
+        {
+            csmFloat32 scale;
+            CubismIdHandle id = ResolvePhysicsSource(physicsSources, _model, looks[i].id, scale);
+            if (id != looks[i].id)
+            {
+                LAppPal::PrintLogLn("[APP]look/breath: %s is driven by physics, using input %s (x%.2f)",
+                                    looks[i].id->GetString().GetRawString(), id->GetString().GetRawString(), scale);
+            }
+            lookParameters.PushBack(CubismLook::LookParameterData(id, looks[i].fx * scale, looks[i].fy * scale, looks[i].fxy * scale));
+        }
 
         _look->SetParameters(lookParameters);
 
@@ -712,23 +906,48 @@ csmBool LAppModel::HitTest(const csmChar* hitAreaName, csmFloat32 x, csmFloat32 
     return false; // 存在しない場合はfalse
 }
 
-void LAppModel::SetExpression(const csmChar* expressionID)
+csmBool LAppModel::SetExpression(const csmChar* expressionID)
 {
-    ACubismMotion* motion = _expressions[expressionID];
     if (_debugMode)
     {
         LAppPal::PrintLogLn("[APP]expression: [%s]", expressionID);
     }
 
-    if (motion != NULL)
-    {
-        _expressionManager->StartMotion(motion, false);
-        _lastExpressionTime = _userTimeSeconds;
-    }
-    else
+    // csmMap::operator[] inserts a NULL entry for unknown keys, so check first.
+    ACubismMotion* motion = _expressions.IsExist(expressionID) ? _expressions[expressionID] : NULL;
+    if (motion == NULL)
     {
         if (_debugMode) LAppPal::PrintLogLn("[APP]expression[%s] is null ", expressionID);
+        return false;
     }
+
+    _expressionManager->StartMotion(motion, false);
+    _lastExpressionTime = _userTimeSeconds;
+    return true;
+}
+
+csmBool LAppModel::ToggleExpression(const csmChar* expressionID, csmBool& nowActive)
+{
+    nowActive = false;
+    ACubismMotion* motion = _expressions.IsExist(expressionID) ? _expressions[expressionID] : NULL;
+    if (motion == NULL || _expressionToggles == NULL) return false;
+
+    nowActive = _expressionToggles->Toggle(expressionID, static_cast<CubismExpressionMotion*>(motion));
+    if (_debugMode) LAppPal::PrintLogLn("[APP]toggle expression: [%s] -> %s", expressionID, nowActive ? "on" : "off");
+    return true;
+}
+
+void LAppModel::ClearExpressions()
+{
+    if (_expressionToggles) _expressionToggles->Clear();
+    if (_expressionManager) _expressionManager->StopAllMotions();
+    _lastExpressionTime = -1.0f;
+}
+
+std::vector<std::string> LAppModel::GetActiveToggledExpressions() const
+{
+    if (_expressionToggles == NULL) return std::vector<std::string>();
+    return _expressionToggles->GetActive();
 }
 
 void LAppModel::SetRandomExpression()
@@ -758,9 +977,65 @@ void LAppModel::ReloadRenderer()
 {
     DeleteRenderer();
 
-    CreateRenderer(LAppDelegate::GetInstance()->GetWindowWidth(), LAppDelegate::GetInstance()->GetWindowHeight());
+    CreateRendererForModel();
 
     SetupTextures();
+}
+
+namespace {
+// Number of distinct mask sets, matching how CubismClippingManager groups
+// objects into clipping contexts (same mask IDs regardless of order).
+csmInt32 CountClippingContexts(csmInt32 objectCount, const csmInt32* maskCounts, const csmInt32** masks)
+{
+    std::vector<std::vector<csmInt32> > contexts;
+    for (csmInt32 i = 0; i < objectCount; ++i)
+    {
+        if (maskCounts[i] <= 0) continue;
+        std::vector<csmInt32> ids(masks[i], masks[i] + maskCounts[i]);
+        std::sort(ids.begin(), ids.end());
+        if (std::find(contexts.begin(), contexts.end(), ids) == contexts.end())
+        {
+            contexts.push_back(ids);
+        }
+    }
+    return static_cast<csmInt32>(contexts.size());
+}
+}
+
+void LAppModel::CreateRendererForModel()
+{
+    // Per-texture mask limits from CubismClippingManager.hpp:
+    // 36 with a single render texture, 32 per texture when using several.
+    const csmInt32 maxMasksSingle = 36;
+    const csmInt32 maxMasksPerTexture = 32;
+    const csmFloat32 maskBufferSize = 2048.0f;
+
+    csmInt32 clipCount = CountClippingContexts(_model->GetDrawableCount(),
+                                               _model->GetDrawableMaskCounts(),
+                                               _model->GetDrawableMasks());
+    csmInt32 offscreenClipCount = CountClippingContexts(_model->GetOffscreenCount(),
+                                                        _model->GetOffscreenMaskCounts(),
+                                                        _model->GetOffscreenMasks());
+    if (offscreenClipCount > clipCount) clipCount = offscreenClipCount;
+
+    csmInt32 maskBufferCount = 1;
+    if (clipCount > maxMasksSingle)
+    {
+        maskBufferCount = (clipCount + maxMasksPerTexture - 1) / maxMasksPerTexture;
+    }
+
+    CreateRenderer(LAppDelegate::GetInstance()->GetWindowWidth(),
+                   LAppDelegate::GetInstance()->GetWindowHeight(),
+                   maskBufferCount);
+
+    Rendering::CubismRenderer_OpenGLES2* renderer = GetRenderer<Rendering::CubismRenderer_OpenGLES2>();
+    renderer->SetDrawableClippingMaskBufferSize(maskBufferSize, maskBufferSize);
+    renderer->SetOffscreenClippingMaskBufferSize(maskBufferSize, maskBufferSize);
+
+    if (_debugMode)
+    {
+        LAppPal::PrintLogLn("[APP]clipping contexts: %d, mask render textures: %d", clipCount, maskBufferCount);
+    }
 }
 
 void LAppModel::SwitchSkin()

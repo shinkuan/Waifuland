@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Copyright(c) Live2D Inc. All rights reserved.
  *
  * Use of this source code is governed by the Live2D Open Software license
@@ -22,6 +22,8 @@
  *         モデル生成、機能コンポーネント生成、更新処理とレンダリングの呼び出しを行う。
  *
  */
+class ExpressionToggleUpdater;
+
 class LAppModel : public LAppModel_Common
 {
 public:
@@ -94,13 +96,32 @@ public:
      *
      * @param   expressionID    表情モーションのID
      */
-    void SetExpression(const Csm::csmChar* expressionID);
+    Csm::csmBool SetExpression(const Csm::csmChar* expressionID);
 
     /**
      * @brief   ランダムに選ばれた表情モーションをセットする
      *
      */
     void SetRandomExpression();
+
+    /**
+     * @brief   Toggle a stackable expression layer (VTube Studio-style toggles).
+     *          Unlike SetExpression, several toggled expressions can be active
+     *          at once and they never time out.
+     * @param[out] nowActive  state after toggling
+     * @return  false if the expression ID is unknown
+     */
+    Csm::csmBool ToggleExpression(const Csm::csmChar* expressionID, Csm::csmBool& nowActive);
+
+    /**
+     * @brief   Remove all toggled expressions and the current SetExpression one.
+     */
+    void ClearExpressions();
+
+    /**
+     * @brief   Currently active toggled expressions, in activation order.
+     */
+    std::vector<std::string> GetActiveToggledExpressions() const;
 
     /**
     * @brief   イベントの発火を受け取る
@@ -169,7 +190,14 @@ private:
      *
      */
     void SetupTextures();
+
+    /**
+     * @brief Create the renderer with enough clipping-mask render textures for
+     *        this model (the SDK default of one texture only fits 36 masks).
+     */
+    void CreateRendererForModel();
     Csm::csmVector<Csm::ACubismMotion*> _autoMotions;
+    ExpressionToggleUpdater* _expressionToggles; ///< Owned by _updateScheduler
 
     /**
      * @brief   モーションデータをグループ名から一括でロードする。<br>
