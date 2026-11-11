@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+class JsonValue;
+
 class LAppIPC
 {
 public:
@@ -43,13 +45,13 @@ public:
      *        Read by LAppModel during Update().
      */
     static float GetExternalMouthY() { return _externalMouthY; }
-    static bool HasExternalMouthY() { return _hasExternalMouthY; }
+    static bool HasExternalMouthY(); ///< false once its duration has expired
     static void ClearExternalMouthY() { _hasExternalMouthY = false; }
 
     /**
      * @brief External look-at override.
      */
-    static bool HasExternalLook() { return _hasExternalLook; }
+    static bool HasExternalLook(); ///< false once its duration has expired
     static float GetExternalLookX() { return _externalLookX; }
     static float GetExternalLookY() { return _externalLookY; }
 
@@ -57,7 +59,10 @@ private:
     LAppIPC();
     ~LAppIPC();
 
-    std::string ProcessCommand(const std::string& json);
+    std::string ProcessLine(const std::string& line);
+    std::string ProcessCommand(const JsonValue& request);
+    static void WriteAll(int fd, const std::string& data);
+    static void ClearOverrides();
     void HandleClient(int clientFd);
 
     int _serverFd;
@@ -79,4 +84,6 @@ private:
     static float _externalLookX;
     static float _externalLookY;
     static bool _hasExternalLook;
+    static double _externalMouthUntil; ///< steady-clock seconds, 0 = no expiry
+    static double _externalLookUntil;
 };

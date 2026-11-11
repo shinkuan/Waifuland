@@ -36,7 +36,7 @@ https://github.com/user-attachments/assets/95dfdedc-4957-4bb7-b79f-f3addd97a6db
 - **Motion & expression** — supports idle animations, lip-sync, eye-blink, physics, and expressions
 - **Configurable model directory** — load models from any path via CLI flag or XDG config
 - **JSON configuration** — customize behavior via `config.json` (default model, emotion timeout, additional model dirs, scale/position, window size)
-- **IPC control** — Unix domain socket API for external control (model switching, expressions, motions, lipsync, zoom, position, look-at direction)
+- **IPC control** — Unix domain socket API for scripts and LLM agents: discover and drive expressions (incl. stackable toggles), motions, gaze, pose, any model parameter, lip sync, zoom and position
 
 ## Prerequisites
 
@@ -221,311 +221,148 @@ bind = SUPER SHIFT, W, exec, killall -s SIGUSR2 waifuland
 
 ## IPC API
 
-Waifuland exposes a Unix domain socket for external control by scripts and programs.
+Waifuland exposes a Unix domain socket so scripts, programs and LLM agents can control the model.
 
 - **Socket path:** `$XDG_RUNTIME_DIR/waifuland.sock` (fallback: `/tmp/waifuland.sock`)
-- **Protocol:** Newline-delimited JSON — send `{"command":"<name>", ...}\n`, receive `{"ok":true, ...}\n`
-- **Requires:** `socat` (install via your package manager)
+- **Protocol:** newline-delimited JSON. Send `{"command":"<name>", ...}\n`, receive one line `{"ok":true, ...}\n`. Errors are `{"ok":false,"error":"..."}`.
+- **Discovery:** `list_commands` lists every command with its arguments; `describe_model` describes what the current model supports.
 
 ### CLI Client
 
-A convenience CLI client `waifuland-ctl` is included in the project root:
+`waifuland-ctl` (project root) builds the JSON for you:
 
 ```bash
-./waifuland-ctl <command> [--key value ...]
+./waifuland-ctl [-c] <command> [--key value | --key=value | --flag ...]
+./waifuland-ctl [-c] --json '<request JSON>'
 ```
 
-### Available Commands
+- Values are sent as JSON numbers, `true`/`false`/`null`, raw JSON when they start with `{` or `[`, and as strings otherwise. A `--flag` without a value means `true`.
+- `-c` prints the response on one line (default: pretty-printed, non-ASCII kept readable).
+- Exit status: `0` ok, `2` Waifuland returned an error, `1` usage/connection error.
+- Needs `socat` or `python3`.
 
-#### `get_status` — Get general status
+### Control model
 
-Returns current model, zoom, position, and visibility.
+Everything an agent can change, and how long it lasts:
+
+| Layer | Commands | Lifetime |
+|---|---|---|
+| Main expression | `set_expression` | One at a time; reverts after `duration` (default: config `emotion_timeout`) |
+| Toggled expressions | `toggle_expression`, `clear_expressions` | Stack with each other and the main expression; optional `duration` |
+| Motions | `do_motion`, `stop_motion` | Play once; the idle motion resumes afterwards. Parameters a motion leaves behind stay until changed (used for held poses) |
+| Parameter overrides | `set_pose`, `set_parameters`, `release_pose`, `release_parameters` | Until released, or for `duration` seconds; blend in/out over `fade` seconds |
+| Gaze | `set_look` | Until `reset`, or for `duration` seconds; then the eyes follow the cursor again |
+| Lip sync | `set_mouth_y` | Until `reset`, or for `duration` seconds |
+
+`reset_model` stops motions, clears expressions, overrides, gaze and mouth, and puts every parameter back to its default.
+
+Parameter overrides are applied before physics, so hair and clothes react to them. Overwrite-blend overrides are applied again at the end of the frame when something later overwrote the parameter (physics outputs, lip sync), so they always win. Re-setting an active override moves smoothly to the new value over `fade`.
+
+### Commands
+
+| Command | Arguments | Description |
+|---|---|---|
+| `list_commands` | — | All commands with arguments |
+| `describe_model` | — | Expressions, motions, pose controls (with what they map to on this model), parameter groups, hit areas, current state |
+| `get_status` | — | Window/model status plus current expression, toggled expressions, motion state, overrides, gaze and mouth overrides |
+| `get_available_models` | — | Model names |
+| `get_current_model` | — | Current model name and index |
+| `set_model` | `name` or `index` | Switch model |
+| `next_model` / `prev_model` | — | Cycle models |
+| `get_expressions` | `detail?` | `expressions`, `active` (toggled), `current` (main); `detail=true` adds the parameters each expression changes |
+| `set_expression` | `id`, `duration?` | Main expression. `duration` in seconds, `-1` = never revert |
+| `toggle_expression` | `id`, `active?`, `duration?` | Flip a stackable expression, or set it with `active`; `duration` turns it off again after N seconds |
+| `clear_expressions` | — | Turn off all expressions |
+| `get_motions` | — | Motions (`group`, `index`, `file`, `duration`, `fade_in`, `fade_out`) and the current motion `state` |
+| `do_motion` | `group?`, `index?`, `priority?` | Play a motion. No `index` = random in the group, no `group` = random `TapBody` motion. Priority: 1 idle, 2 normal (default), 3 force. Fails if an equal or higher priority motion is playing |
+| `stop_motion` | — | Stop motions; idle resumes |
+| `get_parameters` | `filter?`, `ids?` | Parameters with display `name` and `group` (from `.cdi3.json`), `min`/`max`/`default`, current `value`, and `physics_output`/`physics_source`. `filter` matches id, name or group; `ids` is a list or comma-separated string |
+| `set_parameters` | `params{id:value}`, `duration?`, `fade?`, `blend?` | Drive any parameters. `blend`: `overwrite` (default), `add`, `multiply`. `fade` default 0.3s. All-or-nothing: an unknown id rejects the request |
+| `release_parameters` | `ids?`, `fade?` | Release overrides (all when `ids` is omitted) |
+| `set_pose` | `pose{alias:value}` or alias keys, `duration?`, `fade?` | Model-independent controls, see below. Returns the parameters each alias drove and `unsupported` aliases |
+| `release_pose` | `keys?`, `fade?` | Release pose aliases (all overrides when `keys` is omitted) |
+| `set_look` | `x`, `y`, `duration?` or `reset` | Gaze direction, -1..1 (`+x` = viewer's right, `+y` = up). Moves eyes, head and body like cursor tracking |
+| `set_mouth_y` | `value`, `duration?` or `reset` | Lip-sync mouth opening 0..1, for streaming audio-driven lip sync |
+| `reset_model` | — | Back to a clean default state |
+| `set_model_zoom` | `value` | Scale 0.1..10 |
+| `set_model_position` | `x?`, `y?` | Model offset |
+| `get_model_position` | — | Offset and scale |
+| `toggle_hidden` | — | Toggle visibility |
+| `switch_skin` | — | Cycle skins (models whose motion groups are outfits) |
+| `batch` | `commands[]` | Run several commands in the same frame; returns `results[]` and `ok` = all succeeded |
+
+### Pose controls
+
+`set_pose` maps normalized values onto the standard Cubism parameters, using each parameter's own range on the current model. If physics overwrites a head/body angle from a single input (common in VTube Studio models, e.g. `AngleX → ParamAngleX`), the input is driven instead so physics stays natural. `describe_model` lists which aliases the current model supports.
+
+| Alias | Range | Meaning |
+|---|---|---|
+| `head_x`, `head_y`, `head_z` | -1..1 | Head turn (+ viewer's right), tilt (+ up), roll (+ top of head toward viewer's right) |
+| `body_x`, `body_y`, `body_z` | -1..1 | Body turn, lean, roll |
+| `eye_x`, `eye_y` | -1..1 | Eyeballs (+ viewer's right / up) |
+| `eye_open`, `eye_open_l`, `eye_open_r` | 0..2 | 0 closed, 1 normal, 2 widest |
+| `eye_smile` | 0..1 | Smiling eyes |
+| `brow_y`, `brow_angle`, `brow_form` | -1..1 | Eyebrow height, angle, shape |
+| `mouth_open` | 0..1 | Mouth opening |
+| `mouth_form` | -1..1 | Mouth shape (- frown, + smile) |
+| `cheek` | 0..1 | Blush |
+| `arm_l`, `arm_r`, `arm_l_b`, `arm_r_b`, `hand_l`, `hand_r`, `shoulder_y` | -1..1 | Standard arm/hand/shoulder parameters (many models use custom ones instead: find them with `get_parameters`) |
+
+### Examples
 
 ```bash
-./waifuland-ctl get_status
-```
-
-```json
-{
-    "ok": true,
-    "model": "MyModel",
-    "model_index": 0,
-    "model_count": 3,
-    "hidden": false,
-    "zoom": 1.0,
-    "x": 0.0,
-    "y": 0.0
-}
-```
-
-#### `get_available_models` — List all discovered models
-
-```bash
-./waifuland-ctl get_available_models
-```
-
-```json
-{
-    "ok": true,
-    "models": ["MyModel", "AnotherModel", "ThirdModel"]
-}
-```
-
-#### `get_current_model` — Get current model name and index
-
-```bash
-./waifuland-ctl get_current_model
-```
-
-```json
-{
-    "ok": true,
-    "model": "MyModel",
-    "index": 0
-}
-```
-
-#### `set_model` — Switch model by name or index
-
-```bash
-# By name
-./waifuland-ctl set_model --name "AnotherModel"
-
-# By index
-./waifuland-ctl set_model --index 2
-```
-
-```json
-{
-    "ok": true
-}
-```
-
-#### `next_model` — Switch to next model
-
-```bash
-./waifuland-ctl next_model
-```
-
-```json
-{
-    "ok": true
-}
-```
-
-#### `prev_model` — Switch to previous model
-
-```bash
-./waifuland-ctl prev_model
-```
-
-```json
-{
-    "ok": true
-}
-```
-
-#### `get_expressions` — List expressions for current model
-
-```bash
-./waifuland-ctl get_expressions
-```
-
-```json
-{
-    "ok": true,
-    "expressions": ["happy.exp3.json", "angry.exp3.json", "sad.exp3.json"],
-    "active": []
-}
-```
-
-`active` lists the expressions currently switched on with `toggle_expression`.
-
-#### `set_expression` — Set expression by ID
-
-```bash
-./waifuland-ctl set_expression --id "happy.exp3.json"
-```
-
-```json
-{
-    "ok": true
-}
-```
-
-Only one expression is active at a time with `set_expression`; it reverts after `emotion_timeout`. An unknown ID returns `{"ok":false,"error":"unknown expression: ..."}`.
-
-#### `toggle_expression` — Toggle a stackable expression
-
-```bash
-./waifuland-ctl toggle_expression --id "glasses"
-```
-
-```json
-{
-    "ok": true,
-    "active": true
-}
-```
-
-Toggled expressions stack with each other and with `set_expression`, and never time out, like VTube Studio expression hotkeys. Use them for outfit/accessory switches (glasses, skirt length, etc.).
-
-#### `clear_expressions` — Remove all expressions
-
-```bash
-./waifuland-ctl clear_expressions
-```
-
-Turns off every toggled expression and the current `set_expression` one.
-
-#### `get_motions` — List motions for current model
-
-```bash
-./waifuland-ctl get_motions
-```
-
-```json
-{
-    "ok": true,
-    "motions": [
-        {"group": "Idle", "index": 0, "file": "idle_01.motion3.json"},
-        {"group": "TapBody", "index": 0, "file": "tap_01.motion3.json"}
-    ]
-}
-```
-
-#### `do_motion` — Play a motion
-
-```bash
-# Play a specific motion by group and index
-./waifuland-ctl do_motion --group "TapBody" --index 0
-
-# Play with custom priority (default: 2 = Normal)
-./waifuland-ctl do_motion --group "Idle" --index 0 --priority 3
-
-# Play a random TapBody motion (omit group)
-./waifuland-ctl do_motion
-```
-
-```json
-{
-    "ok": true
-}
-```
-
-#### `set_mouth_y` — Set mouth opening for external lipsync
-
-Value range: `0.0` (closed) to `1.0` (fully open). Send continuously for real-time lipsync.
-
-```bash
-./waifuland-ctl set_mouth_y --value 0.8
-```
-
-```json
-{
-    "ok": true
-}
-```
-
-#### `set_model_zoom` — Set model zoom/scale
-
-Value range: `0.1` to `10.0`.
-
-```bash
-./waifuland-ctl set_model_zoom --value 1.5
-```
-
-```json
-{
-    "ok": true
-}
-```
-
-#### `set_model_position` — Set model position offset
-
-```bash
-./waifuland-ctl set_model_position --x 0.5 --y -0.3
-```
-
-```json
-{
-    "ok": true
-}
-```
-
-#### `get_model_position` — Get current position and zoom
-
-```bash
-./waifuland-ctl get_model_position
-```
-
-```json
-{
-    "ok": true,
-    "x": 0.5,
-    "y": -0.3,
-    "zoom": 1.5
-}
-```
-
-#### `toggle_hidden` — Toggle window visibility
-
-```bash
-./waifuland-ctl toggle_hidden
-```
-
-```json
-{
-    "ok": true,
-    "hidden": true
-}
-```
-
-#### `switch_skin` — Switch model skin/outfit
-
-```bash
-./waifuland-ctl switch_skin
-```
-
-```json
-{
-    "ok": true
-}
-```
-
-#### `set_look` — Override look-at direction (for head/face tracking)
-
-```bash
-# Set look direction (x, y range: -1.0 to 1.0)
-./waifuland-ctl set_look --x 0.5 --y 0.3
-
-# Reset to default (follow cursor)
-./waifuland-ctl set_look --reset
-```
-
-```json
-{
-    "ok": true
-}
+# Learn what the model can do
+./waifuland-ctl describe_model
+./waifuland-ctl get_expressions --detail
+./waifuland-ctl get_parameters --filter mouth
+
+# Expressions
+./waifuland-ctl set_expression --id happy --duration 5
+./waifuland-ctl toggle_expression --id glasses --active true
+./waifuland-ctl toggle_expression --id blush --duration 3
+
+# Motions
+./waifuland-ctl do_motion --group TapBody --index 0
+./waifuland-ctl stop_motion
+
+# Temporary pose: turn head, smile, open mouth for 3 seconds
+./waifuland-ctl set_pose --head_x 0.6 --mouth_form 1 --mouth_open 0.5 --duration 3
+
+# Any parameter, held until released
+./waifuland-ctl set_parameters --params '{"ParamCheek":1,"ParamArmLA":-5}' --fade 0.5
+./waifuland-ctl release_parameters
+
+# Look at the viewer for 2 seconds
+./waifuland-ctl set_look --x 0 --y 0 --duration 2
+
+# Several changes in the same frame
+./waifuland-ctl --json '{"command":"batch","commands":[
+  {"command":"set_expression","id":"happy"},
+  {"command":"set_pose","pose":{"head_y":0.3},"duration":2},
+  {"command":"do_motion","group":"TapBody"}]}'
 ```
 
 ### Raw Socket Usage
 
-You can also communicate directly with the socket without `waifuland-ctl`:
-
 ```bash
 # Using socat
 echo '{"command":"get_status"}' | socat - UNIX-CONNECT:$XDG_RUNTIME_DIR/waifuland.sock
+```
 
-# Using Python
-python3 -c "
-import socket, json
-sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-sock.connect('$XDG_RUNTIME_DIR/waifuland.sock')
-sock.send(b'{\"command\":\"get_status\"}\n')
-print(sock.recv(4096).decode())
-sock.close()
-"
+```python
+import json, os, socket
+
+def waifuland(cmd):
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.connect(os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "waifuland.sock"))
+    s.sendall((json.dumps(cmd) + "\n").encode())
+    buf = b""
+    while not buf.endswith(b"\n"):  # responses can be large (get_parameters)
+        buf += s.recv(65536)
+    s.close()
+    return json.loads(buf)
+
+print(waifuland({"command": "set_pose", "pose": {"head_x": 0.5}, "duration": 2}))
 ```
 
 ## Model Setup
@@ -559,6 +396,7 @@ waifuland/
 │   ├── LAppView.*          # View/projection matrices, rendering coordination
 │   ├── LAppModel.*         # Individual Live2D model instance
 │   ├── LAppIPC.*           # IPC socket server for external control
+│   ├── LAppJson.*          # JSON parser/writer used by the IPC protocol
 │   └── LAppDefine.*        # Global constants and configuration
 ├── protocol/               # Wayland protocol XML files
 │   ├── xdg-shell.xml

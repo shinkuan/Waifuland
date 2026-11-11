@@ -23,6 +23,8 @@ else ()
       ${CMAKE_CURRENT_SOURCE_DIR}/LAppDelegate.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/LAppDelegate.hpp
       ${CMAKE_CURRENT_SOURCE_DIR}/LAppIPC.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/LAppJson.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/LAppJson.hpp
       ${CMAKE_CURRENT_SOURCE_DIR}/LAppIPC.hpp
       ${CMAKE_CURRENT_SOURCE_DIR}/LAppWayland.cpp
 LAppWaylandRegion.cpp

@@ -9,6 +9,8 @@
 
 #include <string>
 #include <vector>
+#include <map>
+#include <set>
 #include <CubismFramework.hpp>
 #include <ICubismModelSetting.hpp>
 #include <Type/csmRectF.hpp>
@@ -23,6 +25,7 @@
  *
  */
 class ExpressionToggleUpdater;
+class ParameterOverrideUpdater;
 
 class LAppModel : public LAppModel_Common
 {
@@ -96,7 +99,7 @@ public:
      *
      * @param   expressionID    表情モーションのID
      */
-    Csm::csmBool SetExpression(const Csm::csmChar* expressionID);
+    Csm::csmBool SetExpression(const Csm::csmChar* expressionID, Csm::csmFloat32 duration = -2.0f);
 
     /**
      * @brief   ランダムに選ばれた表情モーションをセットする
@@ -112,6 +115,12 @@ public:
      * @return  false if the expression ID is unknown
      */
     Csm::csmBool ToggleExpression(const Csm::csmChar* expressionID, Csm::csmBool& nowActive);
+
+    /**
+     * @brief   Turn a toggled expression on or off explicitly (idempotent).
+     * @param   duration  seconds until it switches off again; < 0 = stays on
+     */
+    Csm::csmBool SetToggledExpression(const Csm::csmChar* expressionID, Csm::csmBool active, Csm::csmFloat32 duration);
 
     /**
      * @brief   Remove all toggled expressions and the current SetExpression one.
@@ -163,12 +172,83 @@ public:
         std::string group;
         int index;
         std::string file;
+        float duration;   ///< seconds (one loop)
+        float fadeIn;
+        float fadeOut;
     };
 
     /**
      * @brief   Get all available motions for IPC queries.
      */
     std::vector<MotionInfo> GetMotionList() const;
+
+    // ─── Agent control API (used by LAppIPC) ───────────────────────────────
+
+    struct ParameterInfo {
+        std::string id;
+        std::string name;          ///< display name from .cdi3.json ("" if none)
+        std::string group;         ///< parameter group display name
+        float min, max, def, value;
+        bool physicsOutput;        ///< overwritten by physics every frame
+        std::string physicsSource; ///< single physics input driving it, if any
+    };
+    std::vector<ParameterInfo> GetParameterInfos() const;
+    Csm::csmBool HasParameter(const std::string& id) const;
+
+    enum OverrideBlend { OverrideOverwrite = 0, OverrideAdd = 1, OverrideMultiply = 2 };
+
+    /**
+     * @brief   Temporarily drive a parameter. Re-setting an active override
+     *          transitions smoothly to the new value.
+     * @param   duration  seconds before it is released; < 0 = until released
+     * @param   fade      seconds for blend in / value transition / blend out
+     */
+    Csm::csmBool SetParameterOverride(const std::string& id, float value, OverrideBlend blend,
+                                      float duration, float fade, std::string& error);
+    /** @brief Release overrides (all when `ids` is empty). Returns how many. */
+    int ReleaseParameterOverrides(const std::vector<std::string>& ids, float fade);
+
+    struct OverrideInfo {
+        std::string id;
+        float value;
+        std::string blend;
+        float remaining;   ///< seconds left, < 0 = until released
+        bool releasing;
+    };
+    std::vector<OverrideInfo> GetParameterOverrides() const;
+
+    /** Model-independent pose controls mapped onto standard parameters. */
+    struct PoseTarget { std::string param; float value; };
+    struct PoseAliasInfo {
+        std::string name;
+        std::string range;       ///< accepted normalized range, e.g. "-1..1"
+        std::string description;
+        std::vector<std::string> params; ///< parameters it drives on this model (empty = unsupported)
+    };
+    static Csm::csmBool IsPoseAlias(const std::string& name);
+    std::vector<PoseAliasInfo> GetPoseAliases() const;
+    /** Map a normalized pose value to concrete parameter values on this model. */
+    Csm::csmBool ResolvePose(const std::string& alias, float normalized, std::vector<PoseTarget>& out) const;
+
+    struct MotionState {
+        std::string group;
+        int index;
+        bool playing;
+    };
+    MotionState GetMotionState() const;
+    Csm::csmBool HasMotion(const std::string& group, int index) const;
+    void StopMotions();
+
+    std::string GetCurrentExpression() const { return _currentExpression; }
+
+    struct ExpressionParamInfo { std::string id; std::string name; float value; std::string blend; };
+    std::vector<ExpressionParamInfo> GetExpressionParams(const std::string& expressionID) const;
+
+    std::vector<std::string> GetHitAreaNames() const;
+    Csm::csmBool HasLookOrigin() const { return _hasLookOrigin; }
+
+    /** @brief Stop motions, clear expressions/overrides and reset all parameters to defaults. */
+    void ResetState();
 
     /**
      * @brief   Get the model setting (for IPC to query model capabilities).
@@ -269,6 +349,16 @@ private:
     Csm::csmInt32 _currentSkinIndex;
 
     Csm::csmFloat32 _lastExpressionTime; ///< Time when the last expression was set
+    Csm::csmFloat32 _currentExpressionTimeout; ///< Timeout for the current expression (< 0 = never)
+    std::string _currentExpression;            ///< Expression set via SetExpression ("" if none)
+    std::string _lastMotionGroup;
+    int _lastMotionIndex;
+    ParameterOverrideUpdater* _parameterOverrides; ///< Owned by _updateScheduler
+    std::map<std::string, std::string> _parameterNames;  ///< id -> display name (cdi3)
+    std::map<std::string, std::string> _parameterGroups; ///< id -> group display name (cdi3)
+    std::map<Csm::CubismIdHandle, Csm::CubismIdHandle> _physicsSources; ///< output -> single input
+    std::set<Csm::CubismIdHandle> _physicsOutputs;
+    void LoadDisplayInfo();
     static const Csm::csmFloat32 ExpressionTimeoutSeconds; ///< Seconds before expression reverts to default
     Csm::csmInt32 _nextExpressionIndex; ///< Round-robin index for cycling expressions
 

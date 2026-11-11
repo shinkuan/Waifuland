@@ -13,6 +13,7 @@
 #include <vector>
 #include <algorithm>
 #include <map>
+#include <set>
 #include <cmath>
 #include <cfloat>
 #include <Utils/CubismJson.hpp>
@@ -61,10 +62,27 @@ public:
         {
             if (_layers[i].name == name)
             {
-                _layers[i].active = !_layers[i].active;
+                Set(name, expression, !_layers[i].active, -1.0f);
                 return _layers[i].active;
             }
         }
+        Set(name, expression, true, -1.0f);
+        return true;
+    }
+
+    // duration < 0: stays in the requested state
+    void Set(const std::string& name, CubismExpressionMotion* expression, csmBool active, csmFloat32 duration)
+    {
+        for (size_t i = 0; i < _layers.size(); ++i)
+        {
+            if (_layers[i].name == name)
+            {
+                _layers[i].active = active;
+                _layers[i].remaining = active ? duration : -1.0f;
+                return;
+            }
+        }
+        if (!active) return;
 
         Layer layer;
         layer.name = name;
@@ -74,8 +92,8 @@ public:
         layer.fadeOut = expression->GetFadeOutTime();
         layer.weight = 0.0f;
         layer.active = true;
+        layer.remaining = duration;
         _layers.push_back(layer);
-        return true;
     }
 
     void Clear()
@@ -98,6 +116,11 @@ public:
         for (size_t i = 0; i < _layers.size();)
         {
             Layer& layer = _layers[i];
+            if (layer.active && layer.remaining >= 0.0f)
+            {
+                layer.remaining -= deltaTimeSeconds;
+                if (layer.remaining <= 0.0f) layer.active = false;
+            }
             const csmFloat32 fade = layer.active ? layer.fadeIn : layer.fadeOut;
             const csmFloat32 step = (fade > 0.0f) ? deltaTimeSeconds / fade : 1.0f;
             layer.weight = layer.active ? std::min(1.0f, layer.weight + step)
@@ -138,8 +161,147 @@ private:
         csmFloat32 fadeOut;
         csmFloat32 weight;
         csmBool active;
+        csmFloat32 remaining; ///< seconds until it switches off, < 0 = never
     };
     std::vector<Layer> _layers;
+};
+
+// Temporary per-parameter overrides set over IPC (gaze, pose, mouth, any
+// parameter). Applied before physics so physics inputs react, and re-applied
+// after the rest of the update for parameters something else overwrote
+// later in the frame (physics outputs, lip sync).
+class ParameterOverrideUpdater : public ICubismUpdater
+{
+public:
+    struct Entry
+    {
+        CubismIdHandle id;
+        std::string name;
+        int blend;            // LAppModel::OverrideBlend
+        csmFloat32 from, to;  // value transition
+        csmFloat32 transition, transitionTime;
+        csmFloat32 weight;    // 0..1 blend-in progress
+        csmFloat32 fade;
+        csmFloat32 remaining; // < 0 = until released
+        csmBool releasing;
+        csmFloat32 appliedValue, appliedWeight, written;
+    };
+
+    ParameterOverrideUpdater() : ICubismUpdater(CubismUpdateOrder_Physics - 50) {}
+
+    void Set(CubismIdHandle id, const std::string& name, csmFloat32 value, int blend, csmFloat32 duration, csmFloat32 fade)
+    {
+        for (size_t i = 0; i < _entries.size(); ++i)
+        {
+            Entry& e = _entries[i];
+            if (e.id != id) continue;
+            e.from = (e.blend == blend) ? CurrentValue(e) : value;
+            e.to = value;
+            e.transition = fade;
+            e.transitionTime = 0.0f;
+            e.blend = blend;
+            e.fade = fade;
+            e.remaining = duration;
+            e.releasing = false;
+            return;
+        }
+        Entry e;
+        e.id = id;
+        e.name = name;
+        e.blend = blend;
+        e.from = e.to = value;
+        e.transition = e.transitionTime = 0.0f;
+        e.weight = 0.0f;
+        e.fade = fade;
+        e.remaining = duration;
+        e.releasing = false;
+        e.appliedValue = value;
+        e.appliedWeight = 0.0f;
+        e.written = 0.0f;
+        _entries.push_back(e);
+    }
+
+    int Release(const std::vector<CubismIdHandle>& ids, csmFloat32 fade)
+    {
+        int count = 0;
+        for (size_t i = 0; i < _entries.size(); ++i)
+        {
+            Entry& e = _entries[i];
+            if (!ids.empty() && std::find(ids.begin(), ids.end(), e.id) == ids.end()) continue;
+            if (fade >= 0.0f) e.fade = fade;
+            if (!e.releasing) count++;
+            e.releasing = true;
+        }
+        return count;
+    }
+
+    void Clear() { _entries.clear(); }
+
+    const std::vector<Entry>& Entries() const { return _entries; }
+
+    static csmFloat32 CurrentValue(const Entry& e)
+    {
+        if (e.transition <= 0.0f || e.transitionTime >= e.transition) return e.to;
+        const csmFloat32 t = CubismMath::GetEasingSine(e.transitionTime / e.transition);
+        return e.from + (e.to - e.from) * t;
+    }
+
+    void OnLateUpdate(CubismModel* model, csmFloat32 deltaTimeSeconds) override
+    {
+        for (size_t i = 0; i < _entries.size();)
+        {
+            Entry& e = _entries[i];
+            if (!e.releasing && e.remaining >= 0.0f)
+            {
+                e.remaining -= deltaTimeSeconds;
+                if (e.remaining <= 0.0f) e.releasing = true;
+            }
+            const csmFloat32 step = (e.fade > 0.0f) ? deltaTimeSeconds / e.fade : 1.0f;
+            e.weight = e.releasing ? e.weight - step : std::min(1.0f, e.weight + step);
+            if (e.releasing && e.weight <= 0.0f)
+            {
+                _entries.erase(_entries.begin() + i);
+                continue;
+            }
+            if (e.transitionTime < e.transition) e.transitionTime += deltaTimeSeconds;
+
+            e.appliedValue = CurrentValue(e);
+            e.appliedWeight = CubismMath::GetEasingSine(e.weight);
+            Apply(model, e);
+            e.written = model->GetParameterValue(e.id);
+            ++i;
+        }
+    }
+
+    // Called after all other updates of the frame.
+    void ApplyLate(CubismModel* model)
+    {
+        for (size_t i = 0; i < _entries.size(); ++i)
+        {
+            Entry& e = _entries[i];
+            if (e.blend != LAppModel::OverrideOverwrite) continue;
+            if (std::fabs(model->GetParameterValue(e.id) - e.written) > 1e-5f) Apply(model, e);
+        }
+    }
+
+private:
+    static void Apply(CubismModel* model, const Entry& e)
+    {
+        switch (e.blend)
+        {
+        case LAppModel::OverrideAdd:
+            model->AddParameterValue(e.id, e.appliedValue, e.appliedWeight);
+            break;
+        case LAppModel::OverrideMultiply:
+            model->MultiplyParameterValue(e.id, e.appliedValue, e.appliedWeight);
+            break;
+        default:
+            model->SetParameterValue(e.id, e.appliedValue, e.appliedWeight);
+            break;
+        }
+    }
+
+    std::vector<Entry> _entries;
 };
 
 namespace {
@@ -150,7 +312,7 @@ typedef std::map<CubismIdHandle, CubismIdHandle> PhysicsSourceMap;
 // standard head/body angle parameters through physics from custom inputs
 // (e.g. AngleX -> ParamAngleX), so writing the standard parameter directly has
 // no visible effect: physics overwrites it every frame.
-PhysicsSourceMap BuildPhysicsSourceMap(const csmByte* buffer, csmSizeInt size)
+PhysicsSourceMap BuildPhysicsSourceMap(const csmByte* buffer, csmSizeInt size, std::set<CubismIdHandle>* allOutputs = NULL)
 {
     PhysicsSourceMap result;
     std::map<CubismIdHandle, int> outputCount;
@@ -166,6 +328,7 @@ PhysicsSourceMap BuildPhysicsSourceMap(const csmByte* buffer, csmSizeInt size)
         {
             CubismIdHandle dst = CubismFramework::GetIdManager()->GetId(outputs[o]["Destination"]["Id"].GetRawString());
             outputCount[dst]++;
+            if (allOutputs) allOutputs->insert(dst);
             if (inputs.GetSize() == 1)
             {
                 result[dst] = CubismFramework::GetIdManager()->GetId(inputs[0]["Source"]["Id"].GetRawString());
@@ -221,6 +384,9 @@ LAppModel::LAppModel()
     , _nextExpressionIndex(0)
     , _expressionToggles(NULL)
     , _hasLookOrigin(false)
+    , _currentExpressionTimeout(-1.0f)
+    , _lastMotionIndex(-1)
+    , _parameterOverrides(NULL)
     , _lookOriginX(0.0f)
     , _lookOriginY(0.0f)
 {
@@ -390,7 +556,12 @@ void LAppModel::SetupModel(ICubismModelSetting* setting)
 
         buffer = CreateBuffer(path.GetRawString(), &size);
         LoadPhysics(buffer, size);
-        if (buffer) physicsSources = BuildPhysicsSourceMap(buffer, size);
+        if (buffer)
+        {
+            _physicsOutputs.clear();
+            physicsSources = BuildPhysicsSourceMap(buffer, size, &_physicsOutputs);
+            _physicsSources = physicsSources;
+        }
         DeleteBuffer(buffer, path.GetRawString());
 
         if (_physics != nullptr)
@@ -516,7 +687,13 @@ void LAppModel::SetupModel(ICubismModelSetting* setting)
         _updateScheduler.AddUpdatableList(look);
     }
 
+    // Parameter overrides (IPC pose / parameter control)
+    _parameterOverrides = CSM_NEW ParameterOverrideUpdater();
+    _updateScheduler.AddUpdatableList(_parameterOverrides);
+
     _updateScheduler.SortUpdatableList();
+
+    LoadDisplayInfo();
 
     if (_modelSetting == NULL || _modelMatrix == NULL)
     {
@@ -759,15 +936,19 @@ void LAppModel::Update()
         _dragManager->Set(LAppIPC::GetExternalLookX(), LAppIPC::GetExternalLookY());
     }
 
+    // Re-apply parameter overrides that physics / lip sync overwrote
+    if (_parameterOverrides) _parameterOverrides->ApplyLate(_model);
+
     // Expression timeout: revert to default after emotion_timeout seconds
     // emotion_timeout < 0 means expressions never revert
     {
-        float timeout = LAppConfig::GetInstance().emotionTimeout;
+        float timeout = _currentExpressionTimeout;
         if (timeout >= 0.0f && _lastExpressionTime >= 0.0f &&
             (_userTimeSeconds - _lastExpressionTime) > timeout)
         {
             _expressionManager->StopAllMotions();
             _lastExpressionTime = -1.0f;
+            _currentExpression.clear();
             if (_debugMode) LAppPal::PrintLogLn("[APP] Expression timed out, reverted to default");
         }
     }
@@ -778,6 +959,12 @@ void LAppModel::Update()
 
 CubismMotionQueueEntryHandle LAppModel::StartMotion(const csmChar* group, csmInt32 no, csmInt32 priority, ACubismMotion::FinishedMotionCallback onFinishedMotionHandler, ACubismMotion::BeganMotionCallback onBeganMotionHandler)
 {
+    if (no < 0 || no >= _modelSetting->GetMotionCount(group))
+    {
+        if (_debugMode) LAppPal::PrintLogLn("[APP]motion not found: [%s_%d]", group, no);
+        return InvalidMotionQueueEntryHandleValue;
+    }
+
     if (priority == PriorityForce)
     {
         _motionManager->SetReservePriority(priority);
@@ -835,7 +1022,13 @@ CubismMotionQueueEntryHandle LAppModel::StartMotion(const csmChar* group, csmInt
     {
         LAppPal::PrintLogLn("[APP]start motion: [%s_%d]", group, no);
     }
-    return  _motionManager->StartMotionPriority(motion, autoDelete, priority);
+    CubismMotionQueueEntryHandle handle = _motionManager->StartMotionPriority(motion, autoDelete, priority);
+    if (handle != InvalidMotionQueueEntryHandleValue)
+    {
+        _lastMotionGroup = group;
+        _lastMotionIndex = no;
+    }
+    return handle;
 }
 
 CubismMotionQueueEntryHandle LAppModel::StartRandomMotion(const csmChar* group, csmInt32 priority, ACubismMotion::FinishedMotionCallback onFinishedMotionHandler, ACubismMotion::BeganMotionCallback onBeganMotionHandler)
@@ -912,7 +1105,7 @@ csmBool LAppModel::HitTest(const csmChar* hitAreaName, csmFloat32 x, csmFloat32 
     return false; // 存在しない場合はfalse
 }
 
-csmBool LAppModel::SetExpression(const csmChar* expressionID)
+csmBool LAppModel::SetExpression(const csmChar* expressionID, csmFloat32 duration)
 {
     if (_debugMode)
     {
@@ -929,6 +1122,9 @@ csmBool LAppModel::SetExpression(const csmChar* expressionID)
 
     _expressionManager->StartMotion(motion, false);
     _lastExpressionTime = _userTimeSeconds;
+    // duration: -2 = use emotion_timeout from config, < 0 = never revert
+    _currentExpressionTimeout = (duration <= -2.0f) ? LAppConfig::GetInstance().emotionTimeout : duration;
+    _currentExpression = expressionID;
     return true;
 }
 
@@ -943,11 +1139,20 @@ csmBool LAppModel::ToggleExpression(const csmChar* expressionID, csmBool& nowAct
     return true;
 }
 
+csmBool LAppModel::SetToggledExpression(const csmChar* expressionID, csmBool active, csmFloat32 duration)
+{
+    ACubismMotion* motion = _expressions.IsExist(expressionID) ? _expressions[expressionID] : NULL;
+    if (motion == NULL || _expressionToggles == NULL) return false;
+    _expressionToggles->Set(expressionID, static_cast<CubismExpressionMotion*>(motion), active, duration);
+    return true;
+}
+
 void LAppModel::ClearExpressions()
 {
     if (_expressionToggles) _expressionToggles->Clear();
     if (_expressionManager) _expressionManager->StopAllMotions();
     _lastExpressionTime = -1.0f;
+    _currentExpression.clear();
 }
 
 std::vector<std::string> LAppModel::GetActiveToggledExpressions() const
@@ -1205,6 +1410,330 @@ std::vector<std::string> LAppModel::GetExpressionIds() const
     return result;
 }
 
+// ─── Agent control API ──────────────────────────────────────────────────────
+
+namespace {
+enum PoseMapping
+{
+    PoseSigned,   // -1..1 around the default value
+    PoseUnsigned, // 0..1 from minimum to maximum
+    PoseOpen,     // 0 = minimum, 1 = default, 2 = maximum (eye openness)
+};
+
+struct PoseAliasDef
+{
+    const char* name;
+    const char* params[2];
+    PoseMapping mapping;
+    bool followPhysics; // drive the physics input if the parameter is a physics output
+    const char* description;
+};
+
+const PoseAliasDef kPoseAliases[] = {
+    { "head_x", { "ParamAngleX", NULL }, PoseSigned, true, "head turn left/right (+ = model's left, viewer's right)" },
+    { "head_y", { "ParamAngleY", NULL }, PoseSigned, true, "head tilt up/down (+ = up)" },
+    { "head_z", { "ParamAngleZ", NULL }, PoseSigned, true, "head roll (+ = top of head tilts toward viewer's right)" },
+    { "body_x", { "ParamBodyAngleX", NULL }, PoseSigned, true, "body turn left/right" },
+    { "body_y", { "ParamBodyAngleY", NULL }, PoseSigned, true, "body lean up/down" },
+    { "body_z", { "ParamBodyAngleZ", NULL }, PoseSigned, true, "body roll" },
+    { "eye_x", { "ParamEyeBallX", NULL }, PoseSigned, false, "eyeballs left/right (+ = viewer's right)" },
+    { "eye_y", { "ParamEyeBallY", NULL }, PoseSigned, false, "eyeballs up/down (+ = up)" },
+    { "eye_open", { "ParamEyeLOpen", "ParamEyeROpen" }, PoseOpen, false, "both eyes: 0 closed, 1 normal, 2 wide" },
+    { "eye_open_l", { "ParamEyeLOpen", NULL }, PoseOpen, false, "left eye: 0 closed, 1 normal, 2 wide" },
+    { "eye_open_r", { "ParamEyeROpen", NULL }, PoseOpen, false, "right eye: 0 closed, 1 normal, 2 wide" },
+    { "eye_smile", { "ParamEyeLSmile", "ParamEyeRSmile" }, PoseUnsigned, false, "smiling eyes" },
+    { "brow_y", { "ParamBrowLY", "ParamBrowRY" }, PoseSigned, false, "eyebrows up/down" },
+    { "brow_angle", { "ParamBrowLAngle", "ParamBrowRAngle" }, PoseSigned, false, "eyebrow angle (- = angry, + = worried)" },
+    { "brow_form", { "ParamBrowLForm", "ParamBrowRForm" }, PoseSigned, false, "eyebrow shape" },
+    { "mouth_open", { "ParamMouthOpenY", NULL }, PoseUnsigned, false, "mouth opening" },
+    { "mouth_form", { "ParamMouthForm", NULL }, PoseSigned, false, "mouth shape (- = frown, + = smile)" },
+    { "cheek", { "ParamCheek", NULL }, PoseUnsigned, false, "blush" },
+    { "arm_l", { "ParamArmLA", NULL }, PoseSigned, false, "left arm (standard ParamArmLA)" },
+    { "arm_r", { "ParamArmRA", NULL }, PoseSigned, false, "right arm (standard ParamArmRA)" },
+    { "arm_l_b", { "ParamArmLB", NULL }, PoseSigned, false, "left arm, second set (ParamArmLB)" },
+    { "arm_r_b", { "ParamArmRB", NULL }, PoseSigned, false, "right arm, second set (ParamArmRB)" },
+    { "hand_l", { "ParamHandL", NULL }, PoseSigned, false, "left hand" },
+    { "hand_r", { "ParamHandR", NULL }, PoseSigned, false, "right hand" },
+    { "shoulder_y", { "ParamShoulderY", NULL }, PoseSigned, false, "shoulders up/down" },
+};
+
+const PoseAliasDef* FindPoseAlias(const std::string& name)
+{
+    for (size_t i = 0; i < sizeof(kPoseAliases) / sizeof(kPoseAliases[0]); ++i)
+    {
+        if (name == kPoseAliases[i].name) return &kPoseAliases[i];
+    }
+    return NULL;
+}
+
+const char* PoseRange(PoseMapping m)
+{
+    switch (m)
+    {
+    case PoseSigned: return "-1..1";
+    case PoseUnsigned: return "0..1";
+    default: return "0..2";
+    }
+}
+
+bool ModelHasParameter(CubismModel* model, CubismIdHandle id)
+{
+    const csmInt32 index = model->GetParameterIndex(id);
+    return index >= 0 && index < model->GetParameterCount();
+}
+}
+
+void LAppModel::LoadDisplayInfo()
+{
+    _parameterNames.clear();
+    _parameterGroups.clear();
+    const csmChar* file = _modelSetting->GetDisplayInfoFileName();
+    if (file == NULL || strcmp(file, "") == 0) return;
+
+    csmString path = _modelHomeDir + file;
+    csmSizeInt size;
+    csmByte* buffer = CreateBuffer(path.GetRawString(), &size);
+    if (buffer == NULL) return;
+
+    Utils::CubismJson* json = Utils::CubismJson::Create(buffer, size);
+    if (json)
+    {
+        std::map<std::string, std::string> groupNames;
+        Utils::Value& groups = json->GetRoot()["ParameterGroups"];
+        for (csmInt32 i = 0; !groups.IsNull() && i < groups.GetSize(); ++i)
+        {
+            if (groups[i]["Id"].IsNull() || groups[i]["Name"].IsNull()) continue;
+            groupNames[groups[i]["Id"].GetRawString()] = groups[i]["Name"].GetRawString();
+        }
+        Utils::Value& params = json->GetRoot()["Parameters"];
+        for (csmInt32 i = 0; !params.IsNull() && i < params.GetSize(); ++i)
+        {
+            if (params[i]["Id"].IsNull()) continue;
+            const std::string id = params[i]["Id"].GetRawString();
+            if (!params[i]["Name"].IsNull()) _parameterNames[id] = params[i]["Name"].GetRawString();
+            if (!params[i]["GroupId"].IsNull())
+            {
+                std::map<std::string, std::string>::const_iterator g = groupNames.find(params[i]["GroupId"].GetRawString());
+                if (g != groupNames.end()) _parameterGroups[id] = g->second;
+            }
+        }
+        Utils::CubismJson::Delete(json);
+    }
+    DeleteBuffer(buffer, path.GetRawString());
+}
+
+std::vector<LAppModel::ParameterInfo> LAppModel::GetParameterInfos() const
+{
+    std::vector<ParameterInfo> result;
+    if (_model == NULL) return result;
+    const csmInt32 count = _model->GetParameterCount();
+    for (csmInt32 i = 0; i < count; ++i)
+    {
+        CubismIdHandle id = _model->GetParameterId(i);
+        ParameterInfo info;
+        info.id = id->GetString().GetRawString();
+        std::map<std::string, std::string>::const_iterator n = _parameterNames.find(info.id);
+        info.name = (n != _parameterNames.end()) ? n->second : "";
+        std::map<std::string, std::string>::const_iterator g = _parameterGroups.find(info.id);
+        info.group = (g != _parameterGroups.end()) ? g->second : "";
+        info.min = _model->GetParameterMinimumValue(i);
+        info.max = _model->GetParameterMaximumValue(i);
+        info.def = _model->GetParameterDefaultValue(i);
+        info.value = _model->GetParameterValue(i);
+        info.physicsOutput = _physicsOutputs.count(id) > 0;
+        std::map<CubismIdHandle, CubismIdHandle>::const_iterator src = _physicsSources.find(id);
+        info.physicsSource = (src != _physicsSources.end()) ? src->second->GetString().GetRawString() : "";
+        result.push_back(info);
+    }
+    return result;
+}
+
+csmBool LAppModel::HasParameter(const std::string& id) const
+{
+    return _model != NULL && ModelHasParameter(_model, CubismFramework::GetIdManager()->GetId(id.c_str()));
+}
+
+csmBool LAppModel::SetParameterOverride(const std::string& id, float value, OverrideBlend blend,
+                                        float duration, float fade, std::string& error)
+{
+    if (_parameterOverrides == NULL) { error = "model not ready"; return false; }
+    CubismIdHandle handle = CubismFramework::GetIdManager()->GetId(id.c_str());
+    if (!ModelHasParameter(_model, handle)) { error = "unknown parameter: " + id; return false; }
+    _parameterOverrides->Set(handle, id, value, blend, duration, fade < 0.0f ? 0.0f : fade);
+    return true;
+}
+
+int LAppModel::ReleaseParameterOverrides(const std::vector<std::string>& ids, float fade)
+{
+    if (_parameterOverrides == NULL) return 0;
+    std::vector<CubismIdHandle> handles;
+    for (size_t i = 0; i < ids.size(); ++i) handles.push_back(CubismFramework::GetIdManager()->GetId(ids[i].c_str()));
+    if (!ids.empty() && handles.empty()) return 0;
+    return _parameterOverrides->Release(handles, fade);
+}
+
+std::vector<LAppModel::OverrideInfo> LAppModel::GetParameterOverrides() const
+{
+    std::vector<OverrideInfo> result;
+    if (_parameterOverrides == NULL) return result;
+    const std::vector<ParameterOverrideUpdater::Entry>& entries = _parameterOverrides->Entries();
+    for (size_t i = 0; i < entries.size(); ++i)
+    {
+        OverrideInfo info;
+        info.id = entries[i].name;
+        info.value = entries[i].to;
+        info.blend = entries[i].blend == OverrideAdd ? "add" : (entries[i].blend == OverrideMultiply ? "multiply" : "overwrite");
+        info.remaining = entries[i].remaining;
+        info.releasing = entries[i].releasing;
+        result.push_back(info);
+    }
+    return result;
+}
+
+csmBool LAppModel::IsPoseAlias(const std::string& name)
+{
+    return FindPoseAlias(name) != NULL;
+}
+
+csmBool LAppModel::ResolvePose(const std::string& alias, float v, std::vector<PoseTarget>& out) const
+{
+    out.clear();
+    const PoseAliasDef* def = FindPoseAlias(alias);
+    if (def == NULL || _model == NULL) return false;
+
+    for (int p = 0; p < 2 && def->params[p] != NULL; ++p)
+    {
+        CubismIdHandle id = CubismFramework::GetIdManager()->GetId(def->params[p]);
+        if (!ModelHasParameter(_model, id)) continue;
+        if (def->followPhysics)
+        {
+            std::map<CubismIdHandle, CubismIdHandle>::const_iterator src = _physicsSources.find(id);
+            if (src != _physicsSources.end() && ModelHasParameter(_model, src->second)) id = src->second;
+        }
+        const csmInt32 index = _model->GetParameterIndex(id);
+        const float mn = _model->GetParameterMinimumValue(index);
+        const float mx = _model->GetParameterMaximumValue(index);
+        const float df = _model->GetParameterDefaultValue(index);
+        float value;
+        switch (def->mapping)
+        {
+        case PoseSigned:
+        {
+            const float c = std::max(-1.0f, std::min(1.0f, v));
+            value = (c >= 0.0f) ? df + c * (mx - df) : df + c * (df - mn);
+            break;
+        }
+        case PoseUnsigned:
+        {
+            const float c = std::max(0.0f, std::min(1.0f, v));
+            value = mn + c * (mx - mn);
+            break;
+        }
+        default: // PoseOpen
+        {
+            const float c = std::max(0.0f, std::min(2.0f, v));
+            value = (c <= 1.0f) ? mn + c * (df - mn) : df + (c - 1.0f) * (mx - df);
+            break;
+        }
+        }
+        PoseTarget t;
+        t.param = id->GetString().GetRawString();
+        t.value = value;
+        out.push_back(t);
+    }
+    return true;
+}
+
+std::vector<LAppModel::PoseAliasInfo> LAppModel::GetPoseAliases() const
+{
+    std::vector<PoseAliasInfo> result;
+    for (size_t i = 0; i < sizeof(kPoseAliases) / sizeof(kPoseAliases[0]); ++i)
+    {
+        PoseAliasInfo info;
+        info.name = kPoseAliases[i].name;
+        info.range = PoseRange(kPoseAliases[i].mapping);
+        info.description = kPoseAliases[i].description;
+        std::vector<PoseTarget> targets;
+        ResolvePose(info.name, 0.0f, targets);
+        for (size_t t = 0; t < targets.size(); ++t) info.params.push_back(targets[t].param);
+        result.push_back(info);
+    }
+    return result;
+}
+
+LAppModel::MotionState LAppModel::GetMotionState() const
+{
+    MotionState state;
+    state.group = _lastMotionGroup;
+    state.index = _lastMotionIndex;
+    state.playing = _motionManager != NULL && !_motionManager->IsFinished();
+    return state;
+}
+
+csmBool LAppModel::HasMotion(const std::string& group, int index) const
+{
+    return _modelSetting != NULL && index >= 0 && index < _modelSetting->GetMotionCount(group.c_str());
+}
+
+void LAppModel::StopMotions()
+{
+    if (_motionManager == NULL) return;
+    _motionManager->StopAllMotions();
+    // StopAllMotions leaves the stopped motion's priority as "current", which
+    // would block the idle motion (and anything below it) forever. An update
+    // with an empty queue resets it without touching parameters.
+    _motionManager->UpdateMotion(_model, 0.0f);
+    _motionManager->SetReservePriority(0);
+}
+
+std::vector<LAppModel::ExpressionParamInfo> LAppModel::GetExpressionParams(const std::string& expressionID) const
+{
+    std::vector<ExpressionParamInfo> result;
+    if (!_expressions.IsExist(expressionID.c_str())) return result;
+    // csmMap's const operator[] does not compile; IsExist guarantees no insertion.
+    ACubismMotion* motion = const_cast<csmMap<csmString, ACubismMotion*>&>(_expressions)[expressionID.c_str()];
+    if (motion == NULL) return result;
+    csmVector<CubismExpressionMotion::ExpressionParameter> params = static_cast<CubismExpressionMotion*>(motion)->GetExpressionParameters();
+    for (csmUint32 i = 0; i < params.GetSize(); ++i)
+    {
+        ExpressionParamInfo info;
+        info.id = params[i].ParameterId->GetString().GetRawString();
+        std::map<std::string, std::string>::const_iterator n = _parameterNames.find(info.id);
+        info.name = (n != _parameterNames.end()) ? n->second : "";
+        info.value = params[i].Value;
+        info.blend = params[i].BlendType == CubismExpressionMotion::Additive ? "add"
+                   : (params[i].BlendType == CubismExpressionMotion::Multiply ? "multiply" : "overwrite");
+        result.push_back(info);
+    }
+    return result;
+}
+
+std::vector<std::string> LAppModel::GetHitAreaNames() const
+{
+    std::vector<std::string> result;
+    if (_modelSetting == NULL) return result;
+    for (csmInt32 i = 0; i < _modelSetting->GetHitAreasCount(); ++i) result.push_back(_modelSetting->GetHitAreaName(i));
+    return result;
+}
+
+void LAppModel::ResetState()
+{
+    StopMotions();
+    if (_expressionToggles) _expressionToggles->Clear();
+    if (_expressionManager) _expressionManager->StopAllMotions();
+    _lastExpressionTime = -1.0f;
+    _currentExpression.clear();
+    if (_parameterOverrides) _parameterOverrides->Clear();
+
+    // Motions leave their last values in the saved state (e.g. held poses);
+    // put every parameter back to its default.
+    for (csmInt32 i = 0; i < _model->GetParameterCount(); ++i)
+    {
+        _model->SetParameterValue(i, _model->GetParameterDefaultValue(i));
+    }
+    _model->SaveParameters();
+}
+
 std::vector<LAppModel::MotionInfo> LAppModel::GetMotionList() const
 {
     std::vector<MotionInfo> result;
@@ -1220,6 +1749,18 @@ std::vector<LAppModel::MotionInfo> LAppModel::GetMotionList() const
             info.group = group;
             info.index = i;
             info.file = _modelSetting->GetMotionFileName(group, i);
+            info.duration = -1.0f;
+            info.fadeIn = info.fadeOut = -1.0f;
+            csmString key = Utils::CubismString::GetFormatedString("%s_%d", group, i);
+            // csmMap's const operator[] does not compile; IsExist guarantees no insertion.
+            csmMap<csmString, ACubismMotion*>& motions = const_cast<csmMap<csmString, ACubismMotion*>&>(_motions);
+            if (motions.IsExist(key) && motions[key] != NULL)
+            {
+                ACubismMotion* motion = motions[key];
+                info.duration = motion->GetLoopDuration();
+                info.fadeIn = motion->GetFadeInTime();
+                info.fadeOut = motion->GetFadeOutTime();
+            }
             result.push_back(info);
         }
     }

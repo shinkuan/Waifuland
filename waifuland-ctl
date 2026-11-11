@@ -1,59 +1,106 @@
 #!/usr/bin/env bash
 #
-# waifuland-ctl - CLI client for controlling Waifuland via IPC socket.
+# waifuland-ctl - CLI client for controlling Waifuland via its IPC socket.
 #
 # Usage:
-#   waifuland-ctl <command> [args...]
+#   waifuland-ctl [-c] <command> [--key value | --key=value | --flag ...]
+#   waifuland-ctl [-c] --json '<request JSON>'
+#
+# Values are sent as JSON numbers, true/false/null, raw JSON when they start
+# with '{' or '[', and as strings otherwise. A --flag without a value is true.
+# -c prints the response compactly on one line.
 #
 # Examples:
-#   waifuland-ctl get_status
-#   waifuland-ctl get_available_models
-#   waifuland-ctl set_model --name "MyModel"
-#   waifuland-ctl set_model --index 2
-#   waifuland-ctl get_expressions
-#   waifuland-ctl set_expression --id "happy.exp3.json"
-#   waifuland-ctl get_motions
-#   waifuland-ctl do_motion --group "TapBody" --index 0
-#   waifuland-ctl set_mouth_y --value 0.8
-#   waifuland-ctl set_model_zoom --value 1.5
-#   waifuland-ctl set_model_position --x 0.5 --y -0.3
-#   waifuland-ctl get_model_position
-#   waifuland-ctl toggle_hidden
-#   waifuland-ctl next_model
-#   waifuland-ctl prev_model
-#   waifuland-ctl switch_skin
-#   waifuland-ctl set_look --x 0.5 --y 0.3
+#   waifuland-ctl list_commands
+#   waifuland-ctl describe_model
+#   waifuland-ctl set_expression --id happy --duration 5
+#   waifuland-ctl toggle_expression --id glasses --active true
+#   waifuland-ctl do_motion --group TapBody --index 0
+#   waifuland-ctl set_pose --head_x 0.5 --mouth_open 1 --duration 3
+#   waifuland-ctl set_parameters --params '{"ParamCheek":1}' --fade 0.5
+#   waifuland-ctl get_parameters --filter mouth
+#   waifuland-ctl set_look --x 0.5 --y 0.3 --duration 2
 #   waifuland-ctl set_look --reset
-#   waifuland-ctl get_current_model
+#   waifuland-ctl --json '{"command":"batch","commands":[{"command":"set_expression","id":"happy"},{"command":"do_motion","group":"TapBody"}]}'
 #
 # The socket path is $XDG_RUNTIME_DIR/waifuland.sock (fallback: /tmp/waifuland.sock)
 
 set -euo pipefail
 
 SOCK="${XDG_RUNTIME_DIR:-/tmp}/waifuland.sock"
+COMPACT=0
 
-if [ $# -lt 1 ]; then
-    echo "Usage: waifuland-ctl <command> [--key value ...]"
-    echo ""
-    echo "Commands:"
-    echo "  get_status            Get general status"
-    echo "  get_available_models  List all available models"
-    echo "  get_current_model     Get current model name and index"
-    echo "  set_model             Set model (--name or --index)"
-    echo "  next_model            Switch to next model"
-    echo "  prev_model            Switch to previous model"
-    echo "  get_expressions       List expressions for current model"
-    echo "  set_expression        Set expression (--id)"
-    echo "  get_motions           List motions for current model"
-    echo "  do_motion             Play motion (--group, --index, --priority)"
-    echo "  set_mouth_y           Set mouth Y for lipsync (--value 0.0-1.0)"
-    echo "  set_model_zoom        Set zoom level (--value 0.1-10.0)"
-    echo "  set_model_position    Set position (--x, --y)"
-    echo "  get_model_position    Get current position and zoom"
-    echo "  toggle_hidden         Toggle window visibility"
-    echo "  switch_skin           Switch model skin/outfit"
-    echo "  set_look              Set look direction (--x, --y) or --reset"
+usage() {
+    cat <<'EOF'
+Usage: waifuland-ctl [-c] <command> [--key value ...]
+       waifuland-ctl [-c] --json '<request JSON>'
+
+Run `waifuland-ctl list_commands` for all commands and their arguments,
+and `waifuland-ctl describe_model` for what the current model supports.
+EOF
+}
+
+json_string() {
+    local s="$1"
+    s=${s//\\/\\\\}
+    s=${s//\"/\\\"}
+    s=${s//$'\n'/\\n}
+    s=${s//$'\t'/\\t}
+    s=${s//$'\r'/\\r}
+    printf '"%s"' "$s"
+}
+
+json_value() {
+    local v="$1"
+    if [[ "$v" =~ ^-?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][-+]?[0-9]+)?$ ]] || \
+       [[ "$v" == "true" || "$v" == "false" || "$v" == "null" ]] || \
+       [[ "$v" == \{* || "$v" == \[* ]]; then
+        printf '%s' "$v"
+    else
+        json_string "$v"
+    fi
+}
+
+if [ "${1:-}" = "-c" ]; then
+    COMPACT=1
+    shift
+fi
+
+if [ $# -lt 1 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+    usage
     exit 1
+fi
+
+if [ "$1" = "--json" ]; then
+    if [ $# -lt 2 ]; then
+        echo "Error: --json needs a request" >&2
+        exit 1
+    fi
+    JSON="$2"
+else
+    COMMAND="$1"
+    shift
+    JSON="{\"command\":$(json_string "$COMMAND")"
+    while [ $# -gt 0 ]; do
+        arg="$1"
+        shift
+        if [[ "$arg" != --* ]]; then
+            echo "Error: unexpected argument '$arg' (use --key value)" >&2
+            exit 1
+        fi
+        key="${arg#--}"
+        if [[ "$key" == *=* ]]; then
+            value="${key#*=}"
+            key="${key%%=*}"
+        elif [ $# -eq 0 ] || [[ "$1" == --* ]]; then
+            value="true"
+        else
+            value="$1"
+            shift
+        fi
+        JSON="$JSON,$(json_string "$key"):$(json_value "$value")"
+    done
+    JSON="$JSON}"
 fi
 
 if [ ! -S "$SOCK" ]; then
@@ -61,53 +108,42 @@ if [ ! -S "$SOCK" ]; then
     exit 1
 fi
 
-COMMAND="$1"
-shift
-
-# Build JSON from remaining args
-JSON="{\"command\":\"$COMMAND\""
-
-while [ $# -gt 0 ]; do
-    key="${1#--}"  # strip leading --
-    shift
-
-    if [ "$key" = "reset" ]; then
-        JSON="$JSON,\"reset\":true"
-        continue
-    fi
-
-    if [ $# -eq 0 ]; then
-        echo "Error: missing value for --$key" >&2
-        exit 1
-    fi
-    value="$1"
-    shift
-
-    # Check if value is numeric
-    if [[ "$value" =~ ^-?[0-9]*\.?[0-9]+$ ]]; then
-        JSON="$JSON,\"$key\":$value"
+send() {
+    if command -v socat &>/dev/null; then
+        printf '%s\n' "$1" | socat -t 2 - UNIX-CONNECT:"$SOCK" 2>/dev/null
+    elif command -v python3 &>/dev/null; then
+        python3 -I -c '
+import socket, sys
+s = socket.socket(socket.AF_UNIX)
+s.settimeout(5)
+s.connect(sys.argv[1])
+s.sendall(sys.argv[2].encode() + b"\n")
+buf = b""
+while not buf.endswith(b"\n"):
+    chunk = s.recv(65536)
+    if not chunk:
+        break
+    buf += chunk
+sys.stdout.write(buf.decode())
+' "$SOCK" "$1"
     else
-        JSON="$JSON,\"$key\":\"$value\""
+        echo "Error: socat or python3 is required." >&2
+        return 1
     fi
-done
+}
 
-JSON="$JSON}"
-
-# Check if socat is available
-if ! command -v socat &>/dev/null; then
-    echo "Error: socat is required but not installed." >&2
-    exit 1
-fi
-
-# Send command and read response
-RESPONSE=$(echo "$JSON" | socat - UNIX-CONNECT:"$SOCK" 2>/dev/null) || {
+RESPONSE=$(send "$JSON") || {
     echo "Error: Failed to communicate with Waifuland (socket: $SOCK)." >&2
     exit 1
 }
 
-# Pretty-print if python3+json available, otherwise raw
-if command -v python3 &>/dev/null; then
-    echo "$RESPONSE" | python3 -m json.tool 2>/dev/null || echo "$RESPONSE"
+if [ "$COMPACT" = "0" ] && command -v python3 &>/dev/null; then
+    printf '%s\n' "$RESPONSE" | python3 -I -m json.tool --no-ensure-ascii 2>/dev/null || printf '%s\n' "$RESPONSE"
 else
-    echo "$RESPONSE"
+    printf '%s\n' "$RESPONSE"
 fi
+
+# Exit status 2 when Waifuland reports an error
+case "$RESPONSE" in
+    '{"ok":false'*) exit 2 ;;
+esac
