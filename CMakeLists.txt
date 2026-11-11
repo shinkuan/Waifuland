@@ -93,6 +93,7 @@ endmacro()
 
 wayland_generate_protocol(${PROTOCOL_DIR}/xdg-shell.xml xdg-shell)
 wayland_generate_protocol(${PROTOCOL_DIR}/wlr-layer-shell-unstable-v1.xml wlr-layer-shell-unstable-v1)
+wayland_generate_protocol(${PROTOCOL_DIR}/xdg-output-unstable-v1.xml xdg-output-unstable-v1)
 
 # Make executable app.
 add_executable(${APP_NAME} ${PROTOCOL_SOURCES})

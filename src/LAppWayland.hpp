@@ -10,6 +10,7 @@
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 #undef namespace
 #include "xdg-shell-client-protocol.h"
+#include "xdg-output-unstable-v1-client-protocol.h"
 
 struct WaylandContext {
     wl_display* display = nullptr;
@@ -19,6 +20,7 @@ struct WaylandContext {
     wl_seat* seat = nullptr;
     wl_pointer* pointer = nullptr;
     zwlr_layer_shell_v1* layer_shell = nullptr;
+    zxdg_output_manager_v1* xdg_output_manager = nullptr;
 
     wl_surface* surface = nullptr;
     zwlr_layer_surface_v1* layer_surface = nullptr;
@@ -29,8 +31,13 @@ struct WaylandContext {
     EGLSurface egl_surface = EGL_NO_SURFACE;
     EGLConfig egl_config = nullptr;
 
+    // Geometry is in compositor-global logical coordinates (the same space as
+    // cursor positions and layer-surface sizes). With fractional scaling the
+    // wl_output mode is in physical pixels, so xdg-output is preferred.
     struct OutputInfo {
     wl_output* output;
+    zxdg_output_v1* xdg_output;
+    bool has_logical_size;
     int x;
     int y;
     int width;

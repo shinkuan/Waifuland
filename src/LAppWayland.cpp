@@ -122,7 +122,8 @@ static void output_handle_geometry(void* data, struct wl_output* wl_output, int3
 }
 static void output_handle_mode(void* data, struct wl_output* wl_output, uint32_t flags, int32_t width, int32_t height, int32_t refresh) {
     WaylandContext::OutputInfo* info = static_cast<WaylandContext::OutputInfo*>(data);
-    if (flags & WL_OUTPUT_MODE_CURRENT) {
+    // Physical pixels; only a fallback when xdg-output is unavailable.
+    if ((flags & WL_OUTPUT_MODE_CURRENT) && !info->has_logical_size) {
         info->width = width;
         info->height = height;
     }
@@ -144,6 +145,60 @@ static const struct wl_output_listener output_listener = {
     output_handle_description
 };
 
+// --- xdg-output (logical output geometry) ---
+static void xdg_output_handle_logical_position(void* data, struct zxdg_output_v1* xdg_output, int32_t x, int32_t y) {
+    WaylandContext::OutputInfo* info = static_cast<WaylandContext::OutputInfo*>(data);
+    info->x = x;
+    info->y = y;
+}
+static void xdg_output_handle_logical_size(void* data, struct zxdg_output_v1* xdg_output, int32_t width, int32_t height) {
+    WaylandContext::OutputInfo* info = static_cast<WaylandContext::OutputInfo*>(data);
+    info->width = width;
+    info->height = height;
+    info->has_logical_size = true;
+}
+static void xdg_output_handle_done(void* data, struct zxdg_output_v1* xdg_output) {}
+static void xdg_output_handle_name(void* data, struct zxdg_output_v1* xdg_output, const char* name) {}
+static void xdg_output_handle_description(void* data, struct zxdg_output_v1* xdg_output, const char* description) {}
+
+static const struct zxdg_output_v1_listener xdg_output_listener = {
+    xdg_output_handle_logical_position,
+    xdg_output_handle_logical_size,
+    xdg_output_handle_done,
+    xdg_output_handle_name,
+    xdg_output_handle_description,
+};
+
+static void AttachXdgOutput(WaylandContext* wl, WaylandContext::OutputInfo* info) {
+    if (!wl->xdg_output_manager || info->xdg_output) return;
+    info->xdg_output = zxdg_output_manager_v1_get_xdg_output(wl->xdg_output_manager, info->output);
+    zxdg_output_v1_add_listener(info->xdg_output, &xdg_output_listener, info);
+}
+
+// --- Surface enter: track which output the layer surface is actually on ---
+static void surface_handle_enter(void* data, struct wl_surface* surface, struct wl_output* output) {
+    WaylandContext* wl = static_cast<WaylandContext*>(data);
+    for (size_t i = 0; i < wl->outputs.size(); i++) {
+        if (wl->outputs[i]->output == output) {
+            if ((int)i != wl->current_output_index) {
+                LAppPal::PrintLogLn("[Wayland] Surface entered output %d (%s)", (int)i, wl->outputs[i]->name);
+            }
+            wl->current_output_index = (int)i;
+            return;
+        }
+    }
+}
+static void surface_handle_leave(void* data, struct wl_surface* surface, struct wl_output* output) {}
+static void surface_handle_preferred_buffer_scale(void* data, struct wl_surface* surface, int32_t factor) {}
+static void surface_handle_preferred_buffer_transform(void* data, struct wl_surface* surface, uint32_t transform) {}
+
+static const struct wl_surface_listener surface_listener = {
+    surface_handle_enter,
+    surface_handle_leave,
+    surface_handle_preferred_buffer_scale,
+    surface_handle_preferred_buffer_transform,
+};
+
 static void registry_handle_global(void *data, struct wl_registry *registry, uint32_t name, const char *interface, uint32_t version) {
     WaylandContext* wl = static_cast<WaylandContext*>(data);
     if (strcmp(interface, wl_compositor_interface.name) == 0) {
@@ -161,11 +216,19 @@ static void registry_handle_global(void *data, struct wl_registry *registry, uin
         wl_output* out = static_cast<wl_output*>(wl_registry_bind(registry, name, &wl_output_interface, 4));
         WaylandContext::OutputInfo* info = new WaylandContext::OutputInfo();
         info->output = out;
+        info->xdg_output = nullptr;
+        info->has_logical_size = false;
         info->x = 0; info->y = 0;
         info->width = 1920; info->height = 1080;
         memset(info->name, 0, sizeof(info->name));
         wl_output_add_listener(out, &output_listener, info);
         wl->outputs.push_back(info);
+        AttachXdgOutput(wl, info);
+    } else if (strcmp(interface, zxdg_output_manager_v1_interface.name) == 0) {
+        uint32_t xdg_version = version < 3 ? version : 3;
+        wl->xdg_output_manager = static_cast<zxdg_output_manager_v1*>(wl_registry_bind(registry, name, &zxdg_output_manager_v1_interface, xdg_version));
+        // Outputs announced before the manager need their xdg_output now.
+        for (size_t i = 0; i < wl->outputs.size(); i++) AttachXdgOutput(wl, wl->outputs[i]);
     }
 }
 static void registry_handle_global_remove(void *data, struct wl_registry *registry, uint32_t name) {}
@@ -262,6 +325,14 @@ bool SetupWaylandContext(WaylandContext* wl, int width, int height) {
     wl->registry = wl_display_get_registry(wl->display);
     wl_registry_add_listener(wl->registry, &registry_listener, wl);
     wl_display_roundtrip(wl->display);
+    wl_display_roundtrip(wl->display); // wl_output / xdg_output geometry events
+
+    for (size_t i = 0; i < wl->outputs.size(); i++) {
+        WaylandContext::OutputInfo* out = wl->outputs[i];
+        LAppPal::PrintLogLn("[Wayland] Output %d %s: %dx%d at %d,%d (%s)", (int)i, out->name,
+                            out->width, out->height, out->x, out->y,
+                            out->has_logical_size ? "logical" : "mode, no xdg-output");
+    }
 
     if (!wl->compositor || !wl->layer_shell || !wl->shm) {
         LAppPal::PrintLogLn("Missing required Wayland protocols (layer_shell, compositor or shm)\n");
@@ -316,6 +387,7 @@ bool SetupWaylandContext(WaylandContext* wl, int width, int height) {
 
     // Create Wayland & Layer Surface
     wl->surface = wl_compositor_create_surface(wl->compositor);
+    wl_surface_add_listener(wl->surface, &surface_listener, wl);
     
     // Choose OVERLAY or TOP for mascot. TOP gives desktop layer. OVERLAY gives full screen layer (above panels).
     wl->layer_surface = zwlr_layer_shell_v1_get_layer_surface(
@@ -356,6 +428,10 @@ void CleanWaylandContext(WaylandContext* wl) {
     if (wl->layer_surface) zwlr_layer_surface_v1_destroy(wl->layer_surface);
     if (wl->surface) wl_surface_destroy(wl->surface);
     if (wl->layer_shell) zwlr_layer_shell_v1_destroy(wl->layer_shell);
+    for (size_t i = 0; i < wl->outputs.size(); i++) {
+        if (wl->outputs[i]->xdg_output) zxdg_output_v1_destroy(wl->outputs[i]->xdg_output);
+    }
+    if (wl->xdg_output_manager) zxdg_output_manager_v1_destroy(wl->xdg_output_manager);
     if (wl->pointer) wl_pointer_destroy(wl->pointer);
     if (wl->seat) wl_seat_destroy(wl->seat);
     if (wl->shm) wl_shm_destroy(wl->shm);
@@ -456,6 +532,7 @@ void SwitchWaylandOutputToMonitor(int hx, int hy) {
     
     // Switch to new output
     g_wl->surface = wl_compositor_create_surface(g_wl->compositor);
+    wl_surface_add_listener(g_wl->surface, &surface_listener, g_wl);
     wl_output* output = g_wl->outputs[g_wl->current_output_index]->output;
     
     g_wl->layer_surface = zwlr_layer_shell_v1_get_layer_surface(
